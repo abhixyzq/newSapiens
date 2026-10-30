@@ -47,6 +47,8 @@ def _set_cookie(resp: Response, token: str):
 
 @router.post("/register", status_code=201, dependencies=[Depends(rate_limit_auth)])
 def register(body: RegisterIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    if not get_settings().register_enabled:
+        raise HTTPException(403, "Registration is disabled")
     email = body.email.lower()
     from zoneinfo import ZoneInfo
     try:

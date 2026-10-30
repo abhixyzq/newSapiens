@@ -207,7 +207,7 @@ def llm_extract(segs: list[Seg], ref: date, projects: list[dict]) -> dict:
     model = llm_mod.get_llm()
     body = "\n".join(f"[{s.idx}] {s.speaker or 'Unknown'}: {s.text}" for s in segs)
     out = llm_mod.parse_json(model.complete(SYSTEM, f"REFERENCE_DATE: {ref.isoformat()}\nTRANSCRIPT:\n{body[:150000]}",
-                                            json_mode=True))
+                                            json_mode=True, max_tokens=8000))
     by_idx = {s.idx: s for s in segs}
     res = {"decisions": [], "tasks": [], "commitments": [], "insights": [], "engine": f"llm:{model.name}"}
 

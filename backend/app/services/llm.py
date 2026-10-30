@@ -2,7 +2,6 @@
 Implemented over plain HTTP: `openai` (any OpenAI-compatible server) and `anthropic`.
 Customer data is only sent to the provider you configure; nothing is sent when LLM_PROVIDER=rule_based."""
 import json
-import re
 from typing import Optional
 
 import httpx
@@ -79,5 +78,8 @@ def llm_enabled() -> bool:
 
 
 def parse_json(text: str):
-    m = re.search(r"\{.*\}", text, re.S)
-    return json.loads(m.group(0) if m else text)
+    """First JSON object in the reply; tolerates code fences and prose before/after it. Raises ValueError if none."""
+    i = text.find("{")
+    if i < 0:
+        raise ValueError("no JSON object in LLM reply")
+    return json.JSONDecoder().raw_decode(text[i:])[0]

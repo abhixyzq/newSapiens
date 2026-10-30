@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     cookie_secure: bool = False
     access_token_minutes: int = 60 * 12
+    register_enabled: bool = True
+    api_token: str = ""  # static bearer token for the stateless /api/process endpoint (wearable companion app)
 
     storage_dir: str = "./storage"
     max_upload_mb: int = 500
@@ -26,6 +28,10 @@ class Settings(BaseSettings):
     stt_model: str = "whisper-1"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
+    gemini_api_key: str = ""
+    gemini_stt_model: str = "gemini-2.5-flash"
+    deepgram_api_key: str = ""
+    deepgram_model: str = "nova-2"
 
     llm_provider: str = "rule_based"
     llm_model: str = ""

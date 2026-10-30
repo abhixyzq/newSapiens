@@ -1,3 +1,4 @@
+import hmac
 import time
 import uuid
 from collections import defaultdict, deque
@@ -29,6 +30,15 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if not user or not user.is_active or user.deleted_at:
         raise HTTPException(401, "Not authenticated")
     return user
+
+
+def require_api_token(authorization: str = Header(default="")):
+    """Static single-user bearer token (API_TOKEN). Disabled (503) until configured."""
+    expected = get_settings().api_token
+    if not expected:
+        raise HTTPException(503, "API_TOKEN is not configured")
+    if not hmac.compare_digest(authorization.removeprefix("Bearer ").encode(), expected.encode()):
+        raise HTTPException(401, "Invalid token")
 
 
 def get_ctx(request: Request, db: Session = Depends(get_db), user: User = Depends(current_user),

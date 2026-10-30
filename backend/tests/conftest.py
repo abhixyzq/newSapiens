@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 _tmp = tempfile.mkdtemp(prefix="ns-test-")
 os.environ.update(DATABASE_URL=f"sqlite:///{_tmp}/test.db", STORAGE_DIR=f"{_tmp}/storage", JOB_BACKEND="inline", SCHEDULER_ENABLED="false",
                   RATE_LIMIT_PER_MINUTE="100000", AUTH_RATE_LIMIT_PER_MINUTE="100000", STT_PROVIDER="none", LLM_PROVIDER="rule_based",
-                  EMBEDDING_PROVIDER="hash", SECRET_KEY="test-secret-key-test-secret-key")
+                  EMBEDDING_PROVIDER="hash", SECRET_KEY="test-secret-key-test-secret-key", API_TOKEN="test-api-token")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

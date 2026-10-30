@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from .config import get_settings
 from .db import init_db
 from .deps import rate_limit_global
-from .routers import auth, chat, intelligence, orgs, reports, sessions, tasks, workspace
+from .routers import auth, chat, intelligence, orgs, process, reports, sessions, tasks, workspace
 from .services import scheduler
 
 
@@ -46,7 +46,7 @@ async def csrf_origin_check(request: Request, call_next):
     return resp
 
 
-for r in (auth, orgs, sessions, intelligence, tasks, chat, reports, workspace):
+for r in (auth, orgs, sessions, intelligence, tasks, chat, reports, workspace, process):
     app.include_router(r.router)
 
 
