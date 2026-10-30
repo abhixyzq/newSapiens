@@ -1,0 +1,36 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: newsapiens
+      POSTGRES_USER: newsapiens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes: [dbdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newsapiens"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+psycopg://newsapiens:${POSTGRES_PASSWORD}@db:5432/newsapiens
+      STORAGE_DIR: /data/storage
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    volumes: [audio:/data/storage]
+    depends_on:
+      db: { condition: service_healthy }
+    ports: ["8000:8000"]
+
+  web:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://api:8000
+    depends_on: [api]
+    ports: ["3000:3000"]
+
+volumes:
+  dbdata:
+  audio:

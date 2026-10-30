@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 246 248 251; --panel: 255 255 255; --line: 226 232 240; --ink: 15 23 42; --mute: 100 116 139;
+  --navy: 11 27 59; --accent: 14 130 170; --ok: 21 128 61; --warn: 180 83 9; --bad: 185 28 28;
+}
+.dark {
+  --bg: 8 14 29; --panel: 13 22 43; --line: 30 41 66; --ink: 226 232 240; --mute: 148 163 184;
+  --navy: 11 27 59; --accent: 34 190 230; --ok: 74 222 128; --warn: 251 191 36; --bad: 248 113 113;
+}
+html, body { background: rgb(var(--bg)); color: rgb(var(--ink)); }
+body { font-feature-settings: "cv11", "ss01"; -webkit-font-smoothing: antialiased; }
+:focus-visible { outline: 2px solid rgb(var(--accent)); outline-offset: 2px; border-radius: 6px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+@layer components {
+  .card { @apply rounded-xl border border-line bg-panel; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-bg disabled:opacity-50 disabled:cursor-not-allowed; }
+  .btn-primary { @apply border-transparent bg-navy text-white hover:bg-navy/90 dark:bg-accent dark:text-[#04121c] dark:hover:bg-accent/90; }
+  .btn-danger { @apply border-bad/40 text-bad hover:bg-bad/10; }
+  .input { @apply w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm text-ink placeholder:text-mute focus:border-accent; }
+  .label { @apply mb-1 block text-xs font-medium text-mute; }
+  .h-section { @apply text-xs font-semibold uppercase tracking-wider text-mute; }
+}
+@keyframes pulse-rec { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+.rec-dot { animation: pulse-rec 1.4s ease-in-out infinite; }
