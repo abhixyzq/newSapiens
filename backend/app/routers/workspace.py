@@ -1,18 +1,18 @@
 """Projects, dashboard, search, memory, analytics, notifications, integrations."""
 import uuid
 from datetime import datetime, timedelta
-from typing import Literal, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..access import Ctx, visible_session_filter
 from ..db import get_db, utcnow
 from ..deps import audit, client_ip, require
 from ..models import (Commitment, ExtractedDecision, ExtractedTask, Insight, Integration, MemoryEntity, Notification, Project,
-                      RecordingSession, TranscriptionSegment, Speaker)
+                      RecordingSession, Speaker)
 from ..services import queries, retrieval
 from ..services.rag import local, to_utc, tzinfo
 
@@ -60,7 +60,6 @@ def list_projects(ctx: Ctx = Depends(require("viewer")), db: Session = Depends(g
 def get_project(pid: str, ctx: Ctx = Depends(require("viewer")), db: Session = Depends(get_db)):
     p = _proj(db, ctx, pid)
     sess = db.scalars(select(RecordingSession).where(visible_session_filter(ctx), RecordingSession.project_id == p.id).order_by(RecordingSession.occurred_at.desc()).limit(50)).all()
-    ids = [s.id for s in sess]
     tasks = db.scalars(queries.tasks_q(ctx).where(ExtractedTask.project_id == p.id).order_by(ExtractedTask.created_at.desc()).limit(50)).all()
     decs = db.scalars(queries.decisions_q(ctx).where(ExtractedDecision.project_id == p.id).order_by(ExtractedDecision.created_at.desc()).limit(50)).all()
     return {**_pout(p), "sessions": [{"id": str(s.id), "title": s.title, "kind": s.kind, "occurred_at": s.occurred_at.isoformat() + "Z", "status": s.status} for s in sess],

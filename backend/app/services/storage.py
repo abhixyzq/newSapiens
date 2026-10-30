@@ -1,7 +1,6 @@
 """Object storage seam. Only a local-disk backend is implemented; add an S3 backend by
 implementing the same four methods (put/path/delete/exists)."""
 import hashlib
-import os
 import shutil
 import uuid
 from pathlib import Path

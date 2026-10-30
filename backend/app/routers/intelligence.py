@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..access import Ctx, get_owned_session, get_visible_session
-from ..db import get_db, utcnow
+from ..db import get_db
 from ..deps import audit, client_ip, require
 from ..models import (Commitment, ExtractedDecision, ExtractedTask, Insight, RecordingSession, Speaker, TranscriptionSegment)
 from ..services import jobs, pipeline, queries

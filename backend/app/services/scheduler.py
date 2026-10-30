@@ -3,7 +3,6 @@
  * audio retention purge (audio files only, per retention_until)
  * recovery of sessions stuck in transcribing/analyzing"""
 import threading
-import time
 from datetime import datetime, timedelta
 
 from sqlalchemy import select

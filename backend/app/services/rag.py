@@ -17,8 +17,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..access import Ctx, visible_session_filter
-from ..models import (AudioAsset, Commitment, ConversationSummary, ExtractedDecision, ExtractedTask, Insight, Meeting,
-                      MemoryEntity, Project, RecordingSession, Speaker, TranscriptionSegment)
+from ..models import (Commitment, ConversationSummary, ExtractedDecision, ExtractedTask, Insight, Meeting,
+                      MemoryEntity, Project, RecordingSession, Speaker)
 from . import embeddings, llm as llm_mod, queries, retrieval
 from .dates import MONTH_NUM, WEEKDAYS, find_explicit_date
 from .stt import ProviderError, ProviderNotConfigured

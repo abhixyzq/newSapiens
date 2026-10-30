@@ -9,13 +9,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from ..access import Ctx, get_owned_session, get_visible_session, visible_session_filter, RANK
+from ..access import Ctx, get_owned_session, get_visible_session, visible_session_filter
 from ..config import get_settings
 from ..db import get_db, utcnow
 from ..deps import audit, client_ip, require
 from ..models import (AudioAsset, Commitment, ConsentRecord, ConversationSummary, ExtractedDecision, ExtractedTask, Insight,
-                      KnowledgeChunk, KnowledgeDocument, Meeting, MeetingParticipant, Project, RecordingSession, Speaker,
-                      TranscriptionSegment, User, Workspace)
+                      KnowledgeChunk, KnowledgeDocument, Meeting, Project, RecordingSession, Speaker,
+                      TranscriptionSegment, User)
 from ..security import sign_audio, verify_audio_sig
 from ..services import jobs, pipeline
 from ..services.storage import get_storage, new_key

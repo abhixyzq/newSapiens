@@ -7,7 +7,7 @@ sections are omitted."""
 import io
 import os
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from xml.sax.saxutils import escape
 
 from sqlalchemy import select
@@ -149,7 +149,6 @@ def compile_report(db: Session, ctx: Ctx, period_type: str, start_d: date, end_d
     review = sum(1 for d in decs if d.confirmation_status == "needs_review") + sum(1 for t in tasks if t.status in ("needs_confirmation", "detected")) + sum(1 for c in cms if c.needs_review)
     if review:
         obs.append(f"{review} AI-detected item(s) are awaiting review.")
-    mids = {s.id for s in meetings}
     quiet = [s for s in meetings if not any(d.session_id == s.id for d in decs)]
     if meetings and quiet:
         obs.append(f"{len(quiet)} of {len(meetings)} meeting(s) have no decision detected (may reflect extraction limits, not absence).")

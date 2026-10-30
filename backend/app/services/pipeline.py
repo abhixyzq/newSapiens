@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, utcnow
-from ..models import (AudioAsset, Commitment, ConversationSummary, EntityRelationship, ExtractedDecision,
+from ..models import (AudioAsset, Commitment, ConversationSummary, ExtractedDecision,
                       ExtractedTask, Insight, KnowledgeChunk, KnowledgeDocument, MemoryEntity, Meeting,
                       MeetingParticipant, Notification, Project, RecordingSession, Speaker,
                       TranscriptionSegment)

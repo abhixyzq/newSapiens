@@ -2,7 +2,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_SECRET = "dev-insecure-change-me"
+DEFAULT_SECRET = "dev-insecure-change-me-to-a-long-secret-key-32-bytes"
 
 
 class Settings(BaseSettings):

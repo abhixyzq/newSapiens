@@ -49,7 +49,7 @@ def get_ctx(request: Request, db: Session = Depends(get_db), user: User = Depend
         except ValueError:
             ws = None
         role = workspace_role(db, user.id, ws.id) if ws and not ws.deleted_at else None
-        if not role:
+        if not ws or not role:
             raise HTTPException(403, "Not a member of this workspace")
     else:
         ws = db.scalar(select(Workspace).where(Workspace.owner_user_id == user.id,

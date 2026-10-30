@@ -5,7 +5,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import delete, or_, select
+from sqlalchemy import cast, delete, or_, select, String
 from sqlalchemy.orm import Session
 
 from ..access import Ctx, RANK, workspace_role
@@ -61,7 +61,7 @@ def report_out(r: DailyReport, full=False, me: Optional[User] = None) -> dict:
 
 
 def visible_reports(ctx: Ctx):
-    cond = or_(DailyReport.owner_id == ctx.user.id, DailyReport.shared_with.like(f'%"{ctx.user.id}"%'))
+    cond = or_(DailyReport.owner_id == ctx.user.id, cast(DailyReport.shared_with, String).like(f'%"{ctx.user.id}"%'))
     return select(DailyReport).where(DailyReport.workspace_id == ctx.workspace.id, DailyReport.deleted_at.is_(None), cond)
 
 
