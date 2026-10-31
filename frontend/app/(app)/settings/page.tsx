@@ -4,11 +4,15 @@ import { api } from "@/lib/api";
 import { useApp } from "@/components/shell";
 import { Card, ErrorNote, PageHeader } from "@/components/ui";
 
+const LANGS: Record<string, string> = { en: "English", hi: "Hindi", bn: "Bengali", ta: "Tamil", te: "Telugu", mr: "Marathi", gu: "Gujarati", kn: "Kannada", ml: "Malayalam", pa: "Punjabi", ur: "Urdu", es: "Spanish", fr: "French", de: "German", ar: "Arabic", zh: "Chinese", ja: "Japanese" };
+
 export default function Settings() {
   const { me, ws, refresh } = useApp();
   const [p, setP] = useState({ name: me.name, timezone: me.timezone, ret: me.audio_retention_days?.toString() || "" });
   const [w, setW] = useState({ report_time: ws.report_time, timezone: ws.timezone, auto: ws.auto_daily_report });
   const [pw, setPw] = useState("");
+  const [langs, setLangs] = useState<string[]>((me.stt_languages || "en,hi").split(","));
+  const [extra, setExtra] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const run = async (fn: () => Promise<any>, ok: string) => { setErr(null); setMsg(null); try { await fn(); await refresh(); setMsg(ok); } catch (e: any) { setErr(e.message); } };
@@ -27,6 +31,21 @@ export default function Settings() {
               <p className="mt-1 text-xs text-mute">Applies to audio uploaded from now on. Transcripts are kept until you delete them.</p></div>
             <button className="btn btn-primary" onClick={() => run(() => api("/api/auth/me", { method: "PATCH", json: { name: p.name, timezone: p.timezone, audio_retention_days: p.ret ? +p.ret : undefined, clear_retention: !p.ret } }), "Saved")}>Save</button>
           </div>
+        </Card>
+        <Card title="Transcription languages">
+          <p className="mb-3 text-sm text-mute">English and Hindi are always on by default. Add any other languages you speak; mixed-language conversations are transcribed in each language's own script.</p>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {langs.map((c) => <span key={c} className="btn">{LANGS[c] || c}{langs.length > 1 && <button aria-label={`Remove ${LANGS[c] || c}`} className="ml-2" onClick={() => setLangs(langs.filter((x) => x !== c))}>×</button>}</span>)}
+          </div>
+          <div className="flex gap-2">
+            <select aria-label="Add language" className="input" value="" onChange={(e) => e.target.value && setLangs([...langs, e.target.value])}>
+              <option value="">Add a language…</option>
+              {Object.entries(LANGS).filter(([c]) => !langs.includes(c)).map(([c, n]) => <option key={c} value={c}>{n}</option>)}
+            </select>
+            <input aria-label="Other language code" className="input" placeholder="Other ISO code, e.g. sv" maxLength={3} value={extra} onChange={(e) => setExtra(e.target.value.toLowerCase())} />
+            <button className="btn" disabled={!/^[a-z]{2,3}$/.test(extra) || langs.includes(extra)} onClick={() => { setLangs([...langs, extra]); setExtra(""); }}>Add</button>
+          </div>
+          <button className="btn btn-primary mt-3" onClick={() => run(() => api("/api/auth/me", { method: "PATCH", json: { stt_languages: langs } }), "Saved")}>Save</button>
         </Card>
         <Card title={`Workspace reports — ${ws.name}`}>
           {!canWs ? <p className="text-sm text-mute">Only workspace owners/admins can change these.</p> : (

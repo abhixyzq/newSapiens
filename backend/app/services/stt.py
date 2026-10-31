@@ -1,7 +1,8 @@
 """Speech-to-text provider interface.
 
-Implemented: `openai` (Whisper-compatible /audio/transcriptions endpoint), `gemini` (generateContent with inline audio), `deepgram` (pre-recorded API) and `faster_whisper` (local, optional dep).
-Neither does speaker diarization; segments come back with speaker=None unless a provider supplies it.
+Implemented: `openai` (Whisper-compatible /audio/translations endpoint), `groq` (same API, hosted Whisper), `gemini` (generateContent with inline audio), `deepgram` (pre-recorded API) and `faster_whisper` (local, optional dep).
+Transcripts are always English: Whisper-family and Gemini translate; Deepgram does not.
+None does speaker diarization; segments come back with speaker=None unless a provider supplies it.
 `none` (default) raises ProviderNotConfigured -> the session waits in `awaiting_transcription`; a transcript can
 still be imported manually via POST /api/sessions/{id}/transcript."""
 import base64
@@ -46,6 +47,11 @@ class STTProvider(Protocol):
     def transcribe(self, path: str, language: Optional[str] = None) -> STTResult: ...
 
 
+def _langs(language: Optional[str]) -> list[str]:
+    """`language` is one ISO code or a comma-separated preference list; falls back to the STT_LANGUAGES default."""
+    return [x.strip() for x in (language or get_settings().stt_languages).split(",") if x.strip()]
+
+
 class NoSTT:
     name = "none"
 
@@ -57,17 +63,20 @@ class NoSTT:
 class OpenAIWhisper:
     name = "openai"
 
+    def _cfg(self, s):
+        return s.openai_api_key, s.openai_base_url, s.stt_model
+
     def transcribe(self, path, language=None):
         s = get_settings()
-        if not s.openai_api_key:
-            raise ProviderNotConfigured("OPENAI_API_KEY is not set")
-        data = {"model": s.stt_model, "response_format": "verbose_json"}
-        if language:
-            data["language"] = language
+        key, base, model = self._cfg(s)
+        if not key:
+            raise ProviderNotConfigured(f"{self.name.upper()}_API_KEY is not set")
+        # translations endpoint: always English, auto-detects the source language, takes no `language`
+        data = {"model": model, "response_format": "verbose_json", "temperature": 0}
         try:
             with open(path, "rb") as f:
-                r = httpx.post(f"{s.openai_base_url}/audio/transcriptions", data=data,
-                               headers={"Authorization": f"Bearer {s.openai_api_key}"},
+                r = httpx.post(f"{base}/audio/translations", data=data,
+                               headers={"Authorization": f"Bearer {key}"},
                                files={"file": (path.split("/")[-1].split("\\")[-1], f)}, timeout=600)
         except httpx.HTTPError as e:
             raise ProviderError(str(e))
@@ -84,6 +93,14 @@ class OpenAIWhisper:
         return STTResult(segs, j.get("language"), j.get("duration"))
 
 
+class Groq(OpenAIWhisper):
+    """Groq hosts Whisper behind an OpenAI-compatible endpoint (25MB free-tier upload cap)."""
+    name = "groq"
+
+    def _cfg(self, s):
+        return s.groq_api_key, "https://api.groq.com/openai/v1", s.groq_stt_model
+
+
 class Deepgram:
     """Deepgram pre-recorded API (batch). Streaming for live lookup is a separate, later piece."""
     name = "deepgram"
@@ -93,7 +110,8 @@ class Deepgram:
         if not s.deepgram_api_key:
             raise ProviderNotConfigured("DEEPGRAM_API_KEY is not set")
         params = {"model": s.deepgram_model, "smart_format": "true", "utterances": "true"}
-        params.update({"language": language} if language else {"detect_language": "true"})
+        langs = _langs(language)
+        params = list(params.items()) + ([("language", langs[0])] if len(langs) == 1 else [("detect_language", x) for x in langs])
         try:
             with open(path, "rb") as f:
                 r = httpx.post("https://api.deepgram.com/v1/listen", params=params, content=f,
@@ -107,7 +125,7 @@ class Deepgram:
             raise RuntimeError(f"STT rejected the audio: {r.text[:300]}")
         j = r.json()
         ch = (j.get("results", {}).get("channels") or [{}])[0]
-        lang = ch.get("detected_language") or language
+        lang = ch.get("detected_language") or (langs[0] if len(langs) == 1 else None)
         segs = [STTSegment(int(u["start"] * 1000), int(u["end"] * 1000), u["transcript"].strip(),
                            confidence=u.get("confidence"), language=lang)
                 for u in j.get("results", {}).get("utterances") or [] if u.get("transcript", "").strip()]
@@ -125,7 +143,7 @@ class Gemini:
     # ponytail: inline upload caps at ~20MB per request; switch to the Files API for longer recordings
     MAX_BYTES = 18 * 1024 * 1024
     PROMPT = ('Transcribe this audio verbatim. Return JSON: {"language": "<ISO code>", "segments": '
-              '[{"start": <seconds>, "end": <seconds>, "text": "<utterance>"}]}. Return no segments if there is no speech.')
+              '[{"start": "MM:SS", "end": "MM:SS", "text": "<utterance>"}]}. Return no segments if there is no speech.')
 
     def transcribe(self, path, language=None):
         s = get_settings()
@@ -136,9 +154,12 @@ class Gemini:
         if len(raw) > self.MAX_BYTES:
             raise RuntimeError("audio too large for inline Gemini transcription (limit 18MB)")
         mime = mimetypes.guess_type(path)[0] or "audio/mp4"
+        if mime == "video/webm":  # browser MediaRecorder audio; Gemini rejects it as video
+            mime = "audio/webm"
         if mime == "audio/mp4a-latin":
             mime = "audio/mp4"
-        prompt = self.PROMPT + (f" The language is {language}." if language else "")
+        prompt = (self.PROMPT + f" The speech may be in any of these languages (ISO codes): {', '.join(_langs(language))}."
+                  ' Translate everything into English: every segment "text" must be English. "language" is the original spoken language.')
         body = {"contents": [{"parts": [{"text": prompt},
                                         {"inline_data": {"mime_type": mime, "data": base64.b64encode(raw).decode()}}]}],
                 "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}}
@@ -156,8 +177,8 @@ class Gemini:
             j = json.loads(text)
         except (KeyError, IndexError, ValueError):
             raise ProviderError("Gemini returned an unparseable transcript")
-        lang = j.get("language") or language
-        segs = [STTSegment(int(float(x.get("start", 0)) * 1000), int(float(x.get("end", 0)) * 1000),
+        lang = j.get("language")
+        segs = [STTSegment(_ms(x.get("start")), _ms(x.get("end")),
                            x["text"].strip(), language=lang)
                 for x in j.get("segments") or [] if str(x.get("text", "")).strip()]
         return STTResult(segs, lang, segs[-1].end_ms / 1000 if segs else None)
@@ -174,11 +195,22 @@ class FasterWhisper:
             raise ProviderNotConfigured("pip install faster-whisper to use STT_PROVIDER=faster_whisper")
         if FasterWhisper._model is None:
             FasterWhisper._model = WhisperModel(get_settings().stt_model or "small", compute_type="int8")
-        it, info = FasterWhisper._model.transcribe(path, language=language, vad_filter=True)
+        it, info = FasterWhisper._model.transcribe(path, task="translate", vad_filter=True)
         segs = [STTSegment(int(x.start * 1000), int(x.end * 1000), x.text.strip(),
                            confidence=_conf(x.avg_logprob), language=info.language)
                 for x in it if x.text.strip()]
         return STTResult(segs, info.language, info.duration)
+
+
+def _ms(ts) -> int:
+    """Gemini timestamps come back as "MM:SS" (or "HH:MM:SS") strings; fall back to plain seconds."""
+    try:
+        sec = 0.0
+        for part in str(ts or 0).split(":"):
+            sec = sec * 60 + float(part)
+        return int(sec * 1000)
+    except ValueError:
+        return 0
 
 
 def _conf(avg_logprob):
@@ -199,4 +231,4 @@ def set_provider(p: Optional[STTProvider]):  # used by tests / embedding apps
 def get_stt() -> STTProvider:
     if _override:
         return _override
-    return {"openai": OpenAIWhisper, "gemini": Gemini, "deepgram": Deepgram, "faster_whisper": FasterWhisper}.get(get_settings().stt_provider, NoSTT)()
+    return {"openai": OpenAIWhisper, "groq": Groq, "gemini": Gemini, "deepgram": Deepgram, "faster_whisper": FasterWhisper}.get(get_settings().stt_provider, NoSTT)()

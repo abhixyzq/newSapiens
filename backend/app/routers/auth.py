@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -34,6 +35,7 @@ def user_out(db: Session, u: User) -> dict:
     orgs = db.execute(select(Organization, OrganizationMember.role).join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
                       .where(OrganizationMember.user_id == u.id, Organization.deleted_at.is_(None))).all()
     return {"id": str(u.id), "email": u.email, "name": u.name, "timezone": u.timezone, "audio_retention_days": u.audio_retention_days,
+            "stt_languages": u.stt_languages or get_settings().stt_languages,
             "workspaces": [{"id": str(w.id), "name": w.name, "type": w.type, "role": r, "organization_id": str(w.organization_id) if w.organization_id else None,
                             "report_time": w.report_time, "timezone": w.timezone, "auto_daily_report": w.auto_daily_report} for w, r in wss],
             "organizations": [{"id": str(o.id), "name": o.name, "role": r} for o, r in orgs]}
@@ -97,6 +99,7 @@ class ProfileIn(BaseModel):
     timezone: Optional[str] = None
     audio_retention_days: Optional[int] = Field(default=None, ge=1, le=3650)
     clear_retention: bool = False
+    stt_languages: Optional[list[str]] = Field(default=None, max_length=10)
 
 
 @router.patch("/me")
@@ -110,6 +113,11 @@ def update_me(body: ProfileIn, user: User = Depends(current_user), db: Session =
         except Exception:
             raise HTTPException(422, "Unknown timezone")
         user.timezone = body.timezone
+    if body.stt_languages is not None:
+        codes = list(dict.fromkeys(c.strip().lower() for c in body.stt_languages))
+        if not codes or not all(re.fullmatch(r"[a-z]{2,3}", c) for c in codes):
+            raise HTTPException(422, "Languages must be 2-3 letter ISO codes, e.g. en, hi, bn")
+        user.stt_languages = ",".join(codes)
     if body.clear_retention:
         user.audio_retention_days = None
     elif body.audio_retention_days:

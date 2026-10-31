@@ -162,6 +162,7 @@ def _extractive_summary(segs: list[Seg], decisions, tasks) -> dict:
     top = sorted(scored, key=lambda x: -x[0])[:3]
     top.sort(key=lambda x: x[1].idx)
     return {
+        "title": ", ".join(topics[:3]).capitalize(),
         "executive_summary": " ".join(t[2] for t in top),
         "topics": topics,
         "key_statements": [{"text": t[2], "segment_ids": [t[1].id]} for t in top],
@@ -177,7 +178,7 @@ SYSTEM = """You extract structured work intelligence from a transcript. Rules:
 - Task assignee: set only if a person is explicitly named as responsible, or the speaker says "I will" (assignee_basis "first_person" and use the speaker's name). Otherwise assignee=null, assignee_basis="none".
 - deadlines: ISO date (YYYY-MM-DD) only if the date is unambiguous given REFERENCE_DATE, else null and put the phrase in due_text.
 - confidence is 0..1; lower it for hedged or ambiguous statements.
-Return one JSON object with keys: summary{executive_summary,topics[],key_statements[{text,evidence[]}],outcomes[]},
+Return one JSON object with keys: summary{title(3-7 word name for the conversation),executive_summary,topics[],key_statements[{text,evidence[]}],outcomes[]},
 decisions[{text,context,participants[],evidence[],confidence}],
 tasks[{title,description,assignee,assignee_basis,due_date,due_text,priority(low|medium|high),evidence[],confidence}],
 commitments[{person,text,kind(promise|follow_up|responsibility),due_date,due_text,evidence[],confidence}],
@@ -247,7 +248,7 @@ def llm_extract(segs: list[Seg], ref: date, projects: list[dict]) -> dict:
                 res["insights"].append({"kind": kind, "text": it["text"], "segment_ids": [s.id for s in c[0]],
                                         "timestamp_ms": c[0][0].start_ms, "confidence": c[1]})
     sm = out.get("summary") or {}
-    res["summary"] = {"executive_summary": sm.get("executive_summary", ""), "topics": sm.get("topics", [])[:10],
+    res["summary"] = {"title": str(sm.get("title") or "").strip(), "executive_summary": sm.get("executive_summary", ""), "topics": sm.get("topics", [])[:10],
                       "key_statements": [{"text": k["text"], "segment_ids": [s.id for s in _ev(k, by_idx)]}
                                          for k in sm.get("key_statements", []) if k.get("text") and _ev(k, by_idx)],
                       "outcomes": sm.get("outcomes", [])[:10], "generated_by": f"llm:{get_settings().llm_model}"}

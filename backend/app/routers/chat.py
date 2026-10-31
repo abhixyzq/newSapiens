@@ -57,8 +57,18 @@ def _msg_out(db: Session, ctx: Ctx, m: ChatMessage) -> dict:
             "citations": sorted((_cite_out(db, ctx, c) for c in cites), key=lambda x: int(x["ref"][1:]))}
 
 
+def _history(db: Session, chat: ChatSession, turns: int = 6) -> str:
+    """Recent messages before the question being answered, as context for the LLM. [S#] refs are dropped: each answer
+    numbers its own sources, so old ones would be mistaken for the new evidence."""
+    msgs = db.scalars(select(ChatMessage).where(ChatMessage.chat_id == chat.id)
+                      .order_by(ChatMessage.created_at.desc(), ChatMessage.role).limit(turns + 1)).all()[::-1]
+    if msgs and msgs[-1].role == "user":
+        msgs = msgs[:-1]  # the question itself
+    return "\n".join(f"{'User' if m.role == 'user' else 'Sapiens'}: {re.sub(r'\[S\d+\]', '', m.content)[:1500]}" for m in msgs[-turns:])
+
+
 def _answer(db: Session, ctx: Ctx, chat: ChatSession, question: str, prev_assistant_meta: Optional[dict]) -> ChatMessage:
-    res = rag.answer(db, ctx, question, prev_assistant_meta)
+    res = rag.answer(db, ctx, question, prev_assistant_meta, _history(db, chat))
     m = ChatMessage(chat_id=chat.id, role="assistant", content=res["content"], meta=res["meta"])
     db.add(m)
     db.flush()

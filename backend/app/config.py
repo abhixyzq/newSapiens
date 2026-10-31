@@ -25,9 +25,12 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True
 
     stt_provider: str = "none"
+    stt_languages: str = "en,hi"  # default preferred languages (ISO codes, comma-separated); users can override in Settings
     stt_model: str = "whisper-1"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
+    groq_api_key: str = ""
+    groq_stt_model: str = "whisper-large-v3"
     gemini_api_key: str = ""
     gemini_stt_model: str = "gemini-2.5-flash"
     deepgram_api_key: str = ""
@@ -36,6 +39,7 @@ class Settings(BaseSettings):
     llm_provider: str = "rule_based"
     llm_model: str = ""
     llm_base_url: str = ""
+    llm_fallback_model: str = ""  # Groq model (uses GROQ_API_KEY) tried when the main LLM is rate-limited/down
     anthropic_api_key: str = ""
 
     embedding_provider: str = "hash"

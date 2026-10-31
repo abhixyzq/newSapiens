@@ -13,7 +13,7 @@ from ..db import SessionLocal, utcnow
 from ..models import (AudioAsset, Commitment, ConversationSummary, ExtractedDecision,
                       ExtractedTask, Insight, KnowledgeChunk, KnowledgeDocument, MemoryEntity, Meeting,
                       MeetingParticipant, Notification, Project, RecordingSession, Speaker,
-                      TranscriptionSegment)
+                      TranscriptionSegment, User)
 from . import embeddings, extraction, stt
 from .storage import get_storage
 
@@ -210,7 +210,7 @@ def understand(db: Session, s: RecordingSession) -> dict:
     for t in res["tasks"]:
         if key(t["title"]) in have_t:
             continue
-        status = "detected" if t["confidence"] >= 0.7 and t["assignee_name"] else "needs_confirmation"
+        status = "pending"  # auto-accepted; low-confidence items still show the "needs review" flag
         db.add(ExtractedTask(session_id=sid, workspace_id=wid, owner_id=s.owner_id, visibility=s.visibility,
                              title=t["title"], description=t.get("description", ""), assignee_name=t["assignee_name"],
                              assignee_evidence=t["assignee_evidence"], due_date=t["due_date"], due_text=t["due_text"],
@@ -234,6 +234,8 @@ def understand(db: Session, s: RecordingSession) -> dict:
                        timestamp_ms=i["timestamp_ms"], confidence=i["confidence"]))
 
     sm = res["summary"]
+    if s.title.strip() in ("", "Untitled session") and sm.get("title"):
+        s.title = sm["title"][:300]
     db.execute(delete(ConversationSummary).where(ConversationSummary.session_id == sid))
     db.add(ConversationSummary(session_id=sid, workspace_id=wid, executive_summary=sm["executive_summary"],
                                topics=sm["topics"], key_statements=sm["key_statements"], outcomes=sm["outcomes"],
@@ -258,8 +260,8 @@ def understand(db: Session, s: RecordingSession) -> dict:
                                                                              MemoryEntity.project_id == p.id)):
             db.add(MemoryEntity(workspace_id=wid, type="project", name=p.name, aliases=p.aliases or [], project_id=p.id))
     if new_tasks:
-        db.add(Notification(user_id=s.owner_id, kind="tasks_detected", title=f"{new_tasks} task(s) detected in “{s.title}”",
-                            body="Review and confirm owners and deadlines.", link="/tasks"))
+        db.add(Notification(user_id=s.owner_id, kind="tasks_detected", title=f"{new_tasks} task(s) added from “{s.title}”",
+                            body="They're on your task list.", link="/tasks"))
     return {"engine": res["engine"], "note": note}
 
 
@@ -283,7 +285,7 @@ def process_session(session_id, *, force=False, retranscribe=False):
             if audio:
                 s.status, s.error = "transcribing", None
                 db.commit()
-                res = stt.get_stt().transcribe(audio, s.language)
+                res = stt.get_stt().transcribe(audio, s.language or (db.get(User, s.owner_id).stt_languages))
                 save_segments(db, s, [{"start_ms": g.start_ms, "end_ms": g.end_ms, "text": g.text, "speaker": g.speaker,
                                        "confidence": g.confidence, "language": g.language} for g in res.segments], res.language)
                 s.language = s.language or res.language

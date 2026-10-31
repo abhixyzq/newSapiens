@@ -49,10 +49,13 @@ def test_pipeline_extracts_grounded_items(alice):
     sid = make_session(alice)
     d = alice.get(f"/api/sessions/{sid}").json()
     assert d["status"] == "ready" and d["segments"] == 8
+    assert d["title"] == "Website redesign review"  # user-given titles are never overwritten
+    auto = alice.get(f"/api/sessions/{make_session(alice, title='Untitled session')}").json()
+    assert auto["title"] and auto["title"] != "Untitled session"
     assert any("three tier pricing" in x["text"] for x in d["decisions"])
     tasks = {t["title"]: t for t in d["tasks"]}
     pricing = next(t for t in d["tasks"] if "pricing copy" in t["title"].lower())
-    assert pricing["assignee"] == "Rahul" and pricing["due_date"] and pricing["status"] == "detected"
+    assert pricing["assignee"] == "Rahul" and pricing["due_date"] and pricing["status"] == "pending"
     import datetime as dt
     assert dt.date.fromisoformat(pricing["due_date"]).weekday() == 4  # Friday
     meena = next(t for t in d["tasks"] if "contract" in t["title"].lower())
@@ -155,6 +158,46 @@ def test_unknown_topic_is_not_invented(alice):
     make_session(alice)
     out = ask(alice, "What did we decide about quantum computing?")["message"]
     assert "couldn't find" in out["content"] and out["citations"] == []
+
+
+def test_ask_anything_gets_general_answer_when_llm_configured(alice):
+    from app.services import llm
+
+    class FakeLLM(llm.LLM):
+        name = "fake"
+        reply = "Hello there!"
+
+        def complete(self, system, user, **kw):
+            self.last_user = user
+            if isinstance(self.reply, Exception):
+                raise self.reply
+            return self.reply
+
+    make_session(alice)
+    fake = FakeLLM()
+    llm.set_provider(fake)
+    try:
+        first = ask(alice, "hi")
+        out = first["message"]
+        assert out["content"] == "Hello there!" and out["meta"]["mode"] == "llm:fake:general"
+        assert "CONVERSATION" not in fake.last_user
+        # follow-ups in the same chat carry the earlier turns
+        ask(alice, "tell me more", first["chat_id"])
+        assert "User: hi\nSapiens: Hello there!" in fake.last_user and fake.last_user.endswith("tell me more")
+        # grouped citations still verify and link
+        fake.reply = "We chose three tier pricing [S1, S2]."
+        out = ask(alice, "What did we decide about the pricing?")["message"]
+        assert "[S1][S2]" in out["content"] and len(out["citations"]) == 2 and out["meta"]["mode"] == "llm:fake"
+        # matches a word in the records, but the model judges the evidence irrelevant and answers uncited
+        fake.reply = "Pricing in economics means..."
+        out = ask(alice, "explain pricing theory in economics")["message"]
+        assert out["content"].startswith("Pricing in economics") and out["citations"] == [] and out["meta"]["mode"] == "llm:fake:general"
+        # model down: deterministic fallback, plus a note that it's the model, not the question
+        fake.reply = stt.ProviderError("LLM HTTP 429")
+        out = ask(alice, "tell me a joke")["message"]
+        assert "couldn't find" in out["content"] and "AI model is unavailable" in out["content"]
+    finally:
+        llm.set_provider(None)
 
 
 def test_followup_inherits_scope(alice):
@@ -394,7 +437,7 @@ def test_dashboard_search_analytics_projects(alice):
     make_session(alice, when=utcnow())
     o = alice.get("/api/dashboard/overview").json()
     assert o["stats"]["sessions"] == 1 and o["stats"]["decisions_identified"] >= 1 and o["timeline"][0]["status"] == "ready"
-    assert o["recommendations"], "derived from real open tasks"
+    assert not any("confirm" in r["text"] for r in o["recommendations"]), "AI tasks are auto-accepted"
     s = alice.get("/api/search", params={"q": "pricing"}).json()
     assert s["passages"] and s["decisions"]
     a = alice.get("/api/analytics").json()

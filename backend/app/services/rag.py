@@ -6,6 +6,7 @@ gather structured records + hybrid-retrieved transcript chunks -> compose a cite
 Every statement in an answer comes from a retrieved record and carries an [S#] marker that maps to a ChatCitation.
 With an LLM configured the model writes the prose but must cite; if it cites nothing or cites an unknown source,
 the deterministic composer is used instead. Nothing is returned that is not backed by a retrieved record."""
+import logging
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -21,7 +22,8 @@ from ..models import (Commitment, ConversationSummary, ExtractedDecision, Extrac
                       MemoryEntity, Project, RecordingSession, Speaker)
 from . import embeddings, llm as llm_mod, queries, retrieval
 from .dates import MONTH_NUM, WEEKDAYS, find_explicit_date
-from .stt import ProviderError, ProviderNotConfigured
+
+log = logging.getLogger(__name__)
 
 NUMWORDS = {w: i for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen".split())}
 NUMWORDS |= {"twenty": 20, "thirty": 30, "fourteen": 14}
@@ -479,7 +481,7 @@ def pick_option(text: str, options: list[dict], tz) -> Optional[dict]:
     return None
 
 
-def answer(db: Session, ctx: Ctx, question: str, prev_meta: Optional[dict]) -> dict:
+def answer(db: Session, ctx: Ctx, question: str, prev_meta: Optional[dict], history: str = "") -> dict:
     tz = tzinfo(ctx.user.timezone)
     prev_plan = Plan.load(prev_meta["plan"], tz) if prev_meta and prev_meta.get("plan") else None
     ev = Evidence(tz)
@@ -542,41 +544,71 @@ def answer(db: Session, ctx: Ctx, question: str, prev_meta: Optional[dict]) -> d
             return {"content": "I couldn't find that recording in what you have access to.", "evidence": [], "meta": meta}
         text = compose_meeting(db, ctx, s, plan, ev)
         meta["found"] = True
-        return finalize(question, text, ev, meta, scope)
+        return finalize(question, text, ev, meta, scope, history)
 
     # 3. general retrieval
     sessions = _eligible_sessions(db, ctx, plan)
     if not (plan.terms or plan.intents or plan.start or plan.people or plan.project_id):
-        return {"content": "Ask me about your recorded conversations, for example: “What did we decide about pricing?”, "
-                           "“Show all pending commitments”, or “What happened in the meeting on 25 January?”.",
-                "evidence": [], "meta": meta}
+        return open_answer(question, "Ask me about your recorded conversations, for example: “What did we decide about pricing?”, "
+                           "“Show all pending commitments”, or “What happened in the meeting on 25 January?”.", meta, history)
     text, found = compose_general(db, ctx, plan, sessions, ev)
     if not found:
         bits = [x for x in [plan.label, ', '.join(plan.people), plan.project_name, f"“{plan.terms}”" if plan.terms else ""] if x]
-        return {"content": f"I couldn't find anything matching {' · '.join(bits) or 'that'} in the recordings, tasks and decisions "
-                           f"you have access to. I won't guess — try a wider date range or different keywords.",
-                "evidence": [], "meta": meta}
+        return open_answer(question, f"I couldn't find anything matching {' · '.join(bits) or 'that'} in the recordings, tasks and decisions "
+                           f"you have access to. I won't guess — try a wider date range or different keywords.", meta, history)
     meta["found"] = True
-    return finalize(question, text, ev, meta, scope)
+    return finalize(question, text, ev, meta, scope, history)
 
 
-def finalize(question: str, text: str, ev: Evidence, meta: dict, scope: str) -> dict:
+def open_answer(question: str, fallback: str, meta: dict, history: str = "") -> dict:
+    """Nothing in the records matched: if an LLM is configured, answer as a general assistant (no citations) instead of refusing."""
+    if llm_mod.llm_enabled():
+        try:
+            out = _general(question, history)
+            meta["mode"] = f"llm:{llm_mod.get_llm().name}:general"
+            return {"content": out, "evidence": [], "meta": meta}
+        except Exception as e:
+            log.warning("general answer failed: %r", e)
+            fallback += "\n\n_The AI model is unavailable right now (provider rate limit or outage), so I couldn't give a general answer._"
+    return {"content": fallback, "evidence": [], "meta": meta}
+
+
+GENERAL_PROMPT = ("You are Sapiens, a helpful assistant inside a work-recording app. Answer the user's message naturally and concisely in "
+                  "markdown, from general knowledge. Nothing in their recordings matched it: only if it is clearly about their own "
+                  "work, meetings or tasks, say in one short line that their recordings had nothing on it.")
+
+
+def _with_history(history: str, msg: str) -> str:
+    return f"CONVERSATION SO FAR:\n{history}\n\nCURRENT MESSAGE:\n{msg}" if history else msg
+
+
+def _general(question: str, history: str) -> str:
+    return llm_mod.get_llm().complete(GENERAL_PROMPT, _with_history(history, question), max_tokens=4000)
+
+
+def finalize(question: str, text: str, ev: Evidence, meta: dict, scope: str, history: str = "") -> dict:
     """Optionally let an LLM rewrite the composed answer from evidence only; accept it only if citations verify."""
     if llm_mod.llm_enabled() and ev.items:
         try:
             blocks = "\n".join(f"[{e.ref}] ({e.type}; {e.label}) {e.text}" for e in ev.items[:40])
             out = llm_mod.get_llm().complete(
-                "You answer questions about a user's recorded work conversations using ONLY the numbered evidence. "
-                "Cite every claim with [S#]. If evidence is insufficient say so; never add facts, names, dates or tasks that are "
-                "not in the evidence. Mark AI-detected items that need review as unconfirmed. Use concise markdown.",
-                f"QUESTION: {question}\nSCOPE: {scope}\nEVIDENCE:\n{blocks}", max_tokens=1500)
+                "You are Sapiens, an assistant inside a work-recording app. You get the user's message (with the conversation so "
+                "far, if any) and numbered evidence retrieved from their recordings, which may or may not be relevant. If the "
+                "evidence answers the message, answer using ONLY the evidence and cite every claim with [S#], including facts "
+                "repeated from earlier turns; never add facts, names, dates or tasks that are not in it, and mark AI-detected items "
+                "that need review as unconfirmed. Use concise markdown. If the evidence does not answer it, reply with just: NONE",
+                _with_history(history, f"QUESTION: {question}\nSCOPE: {scope}\nEVIDENCE:\n{blocks}"), max_tokens=4000)
+            out = re.sub(r"\[(S\d+(?:\s*,\s*S\d+)+)\]", lambda m: "".join(f"[{r.strip()}]" for r in m[1].split(",")), out)  # [S1, S2] -> [S1][S2]
             refs = set(re.findall(r"\[(S\d+)\]", out))
             valid = {e.ref for e in ev.items}
-            if refs and refs <= valid:
-                meta["mode"] = f"llm:{llm_mod.get_llm().name}"
+            if refs <= valid:
+                if not refs:  # evidence doesn't answer it: re-ask without it, or a weak model keeps talking about the evidence
+                    out = _general(question, history)
+                meta["mode"] = f"llm:{llm_mod.get_llm().name}" + ("" if refs else ":general")
+                meta["found"] = bool(refs)
                 text = out
-        except (ProviderError, ProviderNotConfigured, Exception):
-            pass
+        except Exception as e:
+            log.warning("LLM rewrite failed, keeping deterministic answer: %r", e)
     used = set(re.findall(r"\[(S\d+)\]", text))
     ev.items = [e for e in ev.items if e.ref in used]
     return {"content": text, "evidence": ev.items, "meta": meta}

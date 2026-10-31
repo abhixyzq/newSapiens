@@ -84,7 +84,7 @@ function Ask() {
             {!msgs.length && (
               <div className="pt-10">
                 <h1 className="text-2xl font-semibold tracking-tight">Ask Sapiens</h1>
-                <p className="mt-1 max-w-xl text-sm text-mute">Questions are answered only from recordings, transcripts, tasks and decisions you have access to. Every claim carries a source you can open — and if something isn’t there, I’ll say so.</p>
+                <p className="mt-1 max-w-xl text-sm text-mute">Ask anything. Questions about your work are answered from your recordings, transcripts, tasks and decisions, with a source you can open for every claim; anything else gets a general answer.</p>
                 <div className="mt-6 grid gap-2 sm:grid-cols-2">{sugg.map((s) => <button key={s} className="card p-3 text-left text-sm hover:border-accent" onClick={() => send(s)}>{s}</button>)}</div>
               </div>
             )}

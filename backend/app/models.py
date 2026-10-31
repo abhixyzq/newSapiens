@@ -57,6 +57,7 @@ class User(Base, TS, SoftDelete):
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     audio_retention_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # null = keep until deleted
+    stt_languages: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # "en,hi,..." null = server default
 
 
 class Organization(Base, TS, SoftDelete):
