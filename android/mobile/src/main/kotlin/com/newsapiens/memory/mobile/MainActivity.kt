@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -35,15 +36,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForwardIos
 import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Insights
-import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.TaskAlt
+import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -66,13 +67,13 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -80,8 +81,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.time.LocalDate
 import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,22 +96,26 @@ class MainActivity : ComponentActivity() {
 }
 
 enum class Tab(val label: String, val icon: ImageVector) {
-    Home("Home", Icons.Rounded.Home), Memory("Memory", Icons.Rounded.Layers), Insights("Insights", Icons.Rounded.Insights),
-    Actions("Actions", Icons.Rounded.TaskAlt), Profile("Profile", Icons.Rounded.Person),
+    Home("Home", Icons.Rounded.Home), Timeline("Timeline", Icons.Rounded.Timeline), Tasks("Tasks", Icons.Rounded.TaskAlt),
+    Search("Search", Icons.Rounded.Search), Settings("Settings", Icons.Rounded.Settings),
 }
 
 @Composable
 private fun App() {
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
     var open by rememberSaveable { mutableStateOf<Long?>(null) }
+    var openLine by rememberSaveable { mutableStateOf<Int?>(null) }  // transcript line to show when a moment/event/task is opened
+    var insights by rememberSaveable { mutableStateOf(false) }
+    val openAt = { id: Long, line: Int? -> open = id; openLine = line }
     var capture by rememberSaveable { mutableStateOf(PhoneRecorder.state.value.recording) }  // reopening mid-capture lands on the timer
     var asking by rememberSaveable { mutableStateOf(false) }
     val chat = remember { mutableStateListOf<AskMsg>() }  // ponytail: kept in memory only; persist in Room if people want old chats
-    BackHandler(open != null || capture || asking || tab != Tab.Home) {
-        when { open != null -> open = null; capture -> capture = false; asking -> asking = false; else -> tab = Tab.Home }
+    BackHandler(open != null || capture || asking || insights || tab != Tab.Home) {
+        when { open != null -> open = null; capture -> capture = false; asking -> asking = false; insights -> insights = false; else -> tab = Tab.Home }
     }
     when {
-        open != null -> DetailScreen(open!!) { open = null }
+        open != null -> DetailScreen(open!!, openLine) { open = null }
+        insights -> Scaffold(containerColor = MaterialTheme.colorScheme.background) { pad -> Box(Modifier.padding(pad)) { InsightsScreen { insights = false } } }
         asking -> AskScreen(chat) { asking = false }
         capture -> CaptureScreen { capture = false }
         else -> Scaffold(
@@ -130,11 +138,11 @@ private fun App() {
         ) { pad ->
             Box(Modifier.padding(pad)) {
                 when (tab) {
-                    Tab.Home -> HomeScreen(onOpen = { open = it }, onCapture = { capture = true }, onAsk = { asking = true }, onTab = { tab = it })
-                    Tab.Memory -> MemoryScreen { open = it }
-                    Tab.Insights -> InsightsScreen()
-                    Tab.Actions -> ActionsScreen { open = it }
-                    Tab.Profile -> ProfileScreen()
+                    Tab.Home -> HomeScreen(onOpen = openAt, onCapture = { capture = true }, onAsk = { asking = true }, onTab = { tab = it }, onInsights = { insights = true })
+                    Tab.Timeline -> TimelineScreen(openAt)
+                    Tab.Tasks -> TasksScreen(openAt)
+                    Tab.Search -> MemoryScreen { open = it; openLine = null }
+                    Tab.Settings -> ProfileScreen()
                 }
             }
         }
@@ -157,35 +165,50 @@ private fun rememberStartCapture(onStarted: () -> Unit): () -> Unit {
 private fun greeting() = when (LocalTime.now().hour) { in 5..11 -> "Good morning"; in 12..16 -> "Good afternoon"; else -> "Good evening" }
 
 @Composable
-private fun HomeScreen(onOpen: (Long) -> Unit, onCapture: () -> Unit, onAsk: () -> Unit, onTab: (Tab) -> Unit) {
+private fun HomeScreen(onOpen: (Long, Int?) -> Unit, onCapture: () -> Unit, onAsk: () -> Unit, onTab: (Tab) -> Unit, onInsights: () -> Unit) {
     val ctx = LocalContext.current
     val dao = remember { Db.get(ctx).dao() }
-    val caps by dao.captures().collectAsState(emptyList())
+    val scope = rememberCoroutineScope()
+    val today = LocalDate.now()
+    val (from, to) = remember(today) { dayRange(today) }
+    val caps by remember(from) { dao.capturesBetween(from, to) }.collectAsState(emptyList())
+    val moments by remember(from) { dao.momentsBetween(from, to) }.collectAsState(emptyList())
+    val summary by remember(today) { dao.summary(today.toString()) }.collectAsState(null)
+    val recent by dao.captures().collectAsState(emptyList())
     val tasks by dao.allTasks().collectAsState(emptyList())
-    val decisions by dao.allDecisions().collectAsState(emptyList())
     val rec by PhoneRecorder.state.collectAsState()
     val name = remember { Prefs.name(ctx) }
     val start = rememberStartCapture(onCapture)
+    var expanded by rememberSaveable { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
 
-    val todayIds = caps.filter { dayOf(it.startedAt) == java.time.LocalDate.now() }.map { it.id }.toSet()
+    val key = moments.filter { it.importance >= 0.5 }
+    val (dueNow, upcoming, unconfirmed) = taskBuckets(tasks, today)
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
             Spacer(Modifier.height(20.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(if (name.isBlank()) greeting() else "${greeting()},\n$name", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text("Your memory, organized.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(today.format(DateTimeFormatter.ofPattern("EEEE, MMMM d")), style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
+                        if (rec.recording) {
+                            Spacer(Modifier.width(10.dp))
+                            Box(Modifier.size(7.dp).clip(CircleShape).background(cs.error))
+                            Spacer(Modifier.width(5.dp))
+                            Text("Listening", style = MaterialTheme.typography.labelMedium, color = cs.error)
+                        }
+                    }
+                    Text(if (name.isBlank()) "${greeting()}!" else "${greeting()}, $name", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 }
-                Box(Modifier.size(48.dp).clip(CircleShape).background(cs.primary).clickable { onTab(Tab.Profile) }, contentAlignment = Alignment.Center) {
-                    Text(name.firstOrNull()?.uppercase() ?: "M", color = cs.onPrimary, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Box(Modifier.size(44.dp).clip(CircleShape).background(cs.primary).clickable { onTab(Tab.Settings) }, contentAlignment = Alignment.Center) {
+                    Text(name.firstOrNull()?.uppercase() ?: "M", color = cs.onPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 }
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(14.dp))
 
             Row(
                 Modifier.fillMaxWidth().clip(CircleShape).background(cs.surface).border(BorderStroke(1.dp, cs.outlineVariant), CircleShape)
-                    .clickable(onClick = onAsk).padding(horizontal = 18.dp, vertical = 14.dp),
+                    .clickable(onClick = onAsk).padding(horizontal = 18.dp, vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Rounded.AutoAwesome, null, Modifier.size(20.dp), tint = cs.primary)
@@ -194,43 +217,75 @@ private fun HomeScreen(onOpen: (Long) -> Unit, onCapture: () -> Unit, onAsk: () 
             }
             Spacer(Modifier.height(14.dp))
 
-            // Today's insight
-            Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp))
-                    .background(Brush.linearGradient(listOf(cs.primaryContainer, cs.secondaryContainer)))
-                    .clickable { onTab(Tab.Insights) }.padding(18.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Today's Insight", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = cs.onPrimaryContainer)
-                    Spacer(Modifier.width(6.dp))
-                    Icon(Icons.Rounded.AutoAwesome, null, Modifier.size(18.dp), tint = cs.primary)
-                    Spacer(Modifier.weight(1f))
-                    Icon(Icons.AutoMirrored.Rounded.ArrowForwardIos, null, Modifier.size(14.dp), tint = cs.onPrimaryContainer)
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    if (todayIds.isEmpty()) "Nothing captured yet today. Tap Capture to start."
-                    else "${plural(todayIds.size, "capture")}, ${plural(decisions.count { it.captureId in todayIds }, "key decision")}, " +
-                        "and ${plural(tasks.count { it.captureId in todayIds }, "action item")}.",
-                    style = MaterialTheme.typography.bodyLarge, color = cs.onPrimaryContainer,
-                )
+            // Today's overview: all from stored data; tap for the longer-range Insights
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Stat(spokenText(caps.sumOf { it.speechS ?: 0.0 }), "Speech", Modifier.weight(1f), onInsights)
+                Stat("${sessions(caps)}", "Sessions", Modifier.weight(1f), onInsights)
+                Stat("${key.size}", "Moments", Modifier.weight(1f)) { onTab(Tab.Timeline) }
+                Stat("${tasks.count { !it.done }}", "Pending", Modifier.weight(1f)) { onTab(Tab.Tasks) }
             }
             Spacer(Modifier.height(14.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Stat(Icons.Rounded.Mic, caps.size, "Captures", Modifier.weight(1f)) { onTab(Tab.Memory) }
-                Stat(Icons.Rounded.Description, caps.count { it.status == "ready" }, "Summaries", Modifier.weight(1f)) { onTab(Tab.Memory) }
-                Stat(Icons.Rounded.CheckCircle, tasks.count { !it.done }, "Actions", Modifier.weight(1f)) { onTab(Tab.Actions) }
+            // Your day at a glance
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(cs.surface).border(BorderStroke(1.dp, cs.outlineVariant), RoundedCornerShape(20.dp))
+                    .clickable { expanded = !expanded }.animateContentSize().padding(16.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.AutoAwesome, null, Modifier.size(18.dp), tint = cs.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Your day at a glance", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    if (summary != null) Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, tint = cs.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(8.dp))
+                val s = summary
+                val highlights = s?.highlights?.lines()?.filter { it.isNotBlank() }.orEmpty()
+                Text(
+                    when {
+                        s != null && s.summary.isNotBlank() -> s.summary
+                        s != null && highlights.isNotEmpty() -> "Main events: " + highlights.joinToString("; ") + "."
+                        caps.isEmpty() -> "Nothing captured yet today. Tap Capture to start."
+                        else -> "Your summary appears a couple of minutes after today's captures are processed."
+                    },
+                    style = MaterialTheme.typography.bodyMedium, lineHeight = 21.sp,
+                    color = if (s == null) cs.onSurfaceVariant else cs.onSurface,
+                )
+                if (expanded && s != null) {
+                    if (s.summary.isNotBlank()) highlights.forEach { Text("•  $it", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
+                    Text("Updated ${timeText(s.generatedAt)} from today's transcripts · AI-written; “Likely” marks inferences",
+                        style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                }
             }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(20.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                SectionTitle("Recent Captures", Modifier.weight(1f))
-                TextButton({ onTab(Tab.Memory) }) { Text("View all") }
+                SectionTitle("Important moments", Modifier.weight(1f))
+                TextButton({ onTab(Tab.Timeline) }) { Text("Timeline") }
             }
-            if (caps.isEmpty()) Text("Tap Capture below or record on your watch — captures appear here.",
+            Column(Modifier.animateContentSize()) {
+                if (key.isEmpty()) Text("Decisions, tasks, commitments and ideas from today show up here at the time they were said.",
+                    style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 6.dp))
+                key.takeLast(6).forEach { m -> MomentRow(m) { onOpen(m.captureId, m.line) } }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SectionTitle("What to do", Modifier.weight(1f))
+                TextButton({ onTab(Tab.Tasks) }) { Text("All tasks") }
+            }
+            if (dueNow.isEmpty() && unconfirmed.isEmpty()) Text("Nothing open.", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            (unconfirmed + dueNow).take(3).forEach { t -> TaskRow(t, onClick = { onTab(Tab.Tasks) }) { scope.launch { dao.setDone(t.id, it) } } }
+            if (upcoming.isNotEmpty()) Text("Upcoming: " + upcoming.take(2).joinToString(" · ") { "${it.title} (${dueText(it.dueDate!!)})" },
+                style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp).clickable { onTab(Tab.Tasks) })
+            Spacer(Modifier.height(16.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SectionTitle("Recent captures", Modifier.weight(1f))
+                TextButton({ onTab(Tab.Search) }) { Text("View all") }
+            }
+            if (recent.isEmpty()) Text("Tap Capture below or record on your watch — captures appear here.",
                 style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
-            caps.take(3).forEach { CaptureRow(it, shortWhen(it)) { onOpen(it.id) } }
+            recent.take(3).forEach { CaptureRow(it, shortWhen(it)) { onOpen(it.id, null) } }
             Spacer(Modifier.height(100.dp))  // room for the floating Capture pill
         }
 
@@ -256,17 +311,15 @@ private fun HomeScreen(onOpen: (Long) -> Unit, onCapture: () -> Unit, onAsk: () 
 }
 
 @Composable
-private fun Stat(icon: ImageVector, n: Int, label: String, modifier: Modifier, onClick: () -> Unit) {
+private fun Stat(value: String, label: String, modifier: Modifier, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Column(
-        modifier.clip(RoundedCornerShape(18.dp)).background(cs.surface).border(BorderStroke(1.dp, cs.outlineVariant), RoundedCornerShape(18.dp))
-            .clickable(onClick = onClick).padding(vertical = 14.dp),
+        modifier.clip(RoundedCornerShape(16.dp)).background(cs.surface).border(BorderStroke(1.dp, cs.outlineVariant), RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick).padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(icon, null, Modifier.size(22.dp), tint = cs.onSurface)
-        Spacer(Modifier.height(6.dp))
-        Text("$n", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text(label, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
     }
 }
 

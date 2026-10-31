@@ -14,7 +14,7 @@ from typing import Optional
 
 from ..config import get_settings
 from . import llm as llm_mod
-from .dates import parse_due
+from .dates import parse_due, parse_time
 from .embeddings import tokens
 from .stt import ProviderNotConfigured
 
@@ -26,6 +26,7 @@ class Seg:
     start_ms: int
     speaker: Optional[str]
     text: str
+    end_ms: int = 0
 
 
 NOT_NAMES = set("""we i you he she it they this that there these those please let then so and but also now ok okay
@@ -64,6 +65,14 @@ def _clean_what(w: str) -> str:
                r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|eod|end of (?:the )?(?:day|week|month)|"
                r"\d{1,2}(?:st|nd|rd|th)?\s+\w+|\w+\s+\d{1,2}(?:st|nd|rd|th)?)\s*$", "", w, flags=re.I)
     return (w[:1].upper() + w[1:])[:240]
+
+
+def _clock(*texts) -> Optional[str]:
+    """'HH:MM' from the first text that names a clock time, so a reminder can fire at that minute."""
+    for t in texts:
+        if tm := parse_time(t):
+            return tm.strftime("%H:%M")
+    return None
 
 
 def _priority(s: str) -> str:
@@ -125,7 +134,7 @@ def rule_based(segs: list[Seg], ref: date, projects: list[dict]) -> dict:
             if task and len(task["title"]) >= 4 and once("t", task["title"]):
                 conf = task["confidence"] + (0.05 if due_date else 0)
                 tasks.append({"title": task["title"], "description": sent[:400], "assignee_name": task["assignee"],
-                              "assignee_evidence": task["evidence"], "due_date": due_date, "due_text": due_text,
+                              "assignee_evidence": task["evidence"], "due_date": due_date, "due_text": due_text, "due_time": _clock(sent),
                               "priority": _priority(sent), "segment_ids": [sg.id], "timestamp_ms": sg.start_ms,
                               "confidence": round(max(0.2, min(conf, 0.9)), 2), "project_id": proj})
                 continue
@@ -145,8 +154,12 @@ def rule_based(segs: list[Seg], ref: date, projects: list[dict]) -> dict:
             elif sent.endswith("?") and len(sent.split()) >= 5 and once("q", sent):
                 insights.append({"kind": "question", "text": sent[:400], "segment_ids": [sg.id],
                                  "timestamp_ms": sg.start_ms, "confidence": 0.4})
-    return {"summary": _extractive_summary(segs, decisions, tasks), "decisions": decisions, "tasks": tasks,
-            "commitments": commitments, "insights": insights, "engine": "rule_based"}
+    summary = _extractive_summary(segs, decisions, tasks)
+    events = [{"title": summary["title"] or "Conversation", "description": summary["executive_summary"][:400], "category": "other",
+               "importance": 0.5, "segment_ids": [s.id for s in segs], "start_ms": segs[0].start_ms,
+               "end_ms": max(s.end_ms or s.start_ms for s in segs)}] if segs else []
+    return {"summary": summary, "decisions": decisions, "tasks": tasks, "commitments": commitments, "insights": insights,
+            "events": events, "engine": "rule_based"}
 
 
 def _extractive_summary(segs: list[Seg], decisions, tasks) -> dict:
@@ -172,17 +185,24 @@ def _extractive_summary(segs: list[Seg], decisions, tasks) -> dict:
 
 
 # ------------------------------------------------------------------------------------------ LLM engine
-SYSTEM = """You extract structured work intelligence from a transcript. Rules:
+SYSTEM = """You extract structured work and personal intelligence from a transcript. Rules:
 - Use ONLY what is in the transcript. Never invent people, tasks, deadlines or decisions.
+- Tasks include personal to-dos and plans, not just work: anything someone says they have to / need to / will / must do
+  (e.g. "I have to go to college at 5 tomorrow" -> task "Go to college", due_text "tomorrow 5 AM"). One task per action.
 - Every item MUST list "evidence": the transcript line numbers it is based on. Drop items you cannot cite.
 - Task assignee: set only if a person is explicitly named as responsible, or the speaker says "I will" (assignee_basis "first_person" and use the speaker's name). Otherwise assignee=null, assignee_basis="none".
-- deadlines: ISO date (YYYY-MM-DD) only if the date is unambiguous given REFERENCE_DATE, else null and put the phrase in due_text.
+- deadlines: ISO date (YYYY-MM-DD) only if the date is unambiguous given REFERENCE_DATE, else null. Always put the spoken
+  deadline phrase in due_text, including any time of day ("tomorrow at 5 in the morning").
 - confidence is 0..1; lower it for hedged or ambiguous statements.
 Return one JSON object with keys: summary{title(3-7 word name for the conversation),executive_summary,topics[],key_statements[{text,evidence[]}],outcomes[]},
 decisions[{text,context,participants[],evidence[],confidence}],
 tasks[{title,description,assignee,assignee_basis,due_date,due_text,priority(low|medium|high),evidence[],confidence}],
 commitments[{person,text,kind(promise|follow_up|responsibility),due_date,due_text,evidence[],confidence}],
-risks[{text,evidence[],confidence}], ideas[{text,evidence[],confidence}], open_questions[{text,evidence[],confidence}]."""
+risks[{text,evidence[],confidence}], ideas[{text,evidence[],confidence}], open_questions[{text,evidence[],confidence}],
+events[{title(3-6 words),description(one sentence),category(work|study|personal|meeting|other),importance,evidence[]}].
+- events: split the transcript into the activities it covers; consecutive lines about the same activity are ONE event. importance is 0..1:
+  small talk/greetings < 0.3, plans/decisions/tasks/ideas >= 0.7. Describe only what was said; start anything inferred with "Likely".
+  Never date or time an event from what is said (e.g. "yesterday"); its time comes only from its evidence lines."""
 
 
 def _ev(item, segs_by_idx):
@@ -210,7 +230,7 @@ def llm_extract(segs: list[Seg], ref: date, projects: list[dict]) -> dict:
     out = llm_mod.parse_json(model.complete(SYSTEM, f"REFERENCE_DATE: {ref.isoformat()}\nTRANSCRIPT:\n{body[:150000]}",
                                             json_mode=True, max_tokens=8000))
     by_idx = {s.idx: s for s in segs}
-    res = {"decisions": [], "tasks": [], "commitments": [], "insights": [], "engine": f"llm:{model.name}"}
+    res = {"decisions": [], "tasks": [], "commitments": [], "insights": [], "events": [], "engine": f"llm:{model.name}"}
 
     def common(it):
         ss = _ev(it, by_idx)
@@ -234,6 +254,7 @@ def llm_extract(segs: list[Seg], ref: date, projects: list[dict]) -> dict:
             res["tasks"].append({"title": it["title"][:240], "description": it.get("description", ""), "assignee_name": who,
                                  "assignee_evidence": {"named": "explicit_name", "first_person": "first_person"}.get(basis, "none") if who else "none",
                                  "due_date": _d(it.get("due_date")), "due_text": it.get("due_text"),
+                                 "due_time": _clock(it.get("due_text"), it.get("description")),
                                  "priority": it.get("priority") if it.get("priority") in ("low", "medium", "high") else "medium",
                                  "segment_ids": [s.id for s in c[0]], "timestamp_ms": c[0][0].start_ms, "confidence": c[1],
                                  "project_id": _project_for(it["title"], projects)})
@@ -247,6 +268,17 @@ def llm_extract(segs: list[Seg], ref: date, projects: list[dict]) -> dict:
             if (c := common(it)) and it.get("text"):
                 res["insights"].append({"kind": kind, "text": it["text"], "segment_ids": [s.id for s in c[0]],
                                         "timestamp_ms": c[0][0].start_ms, "confidence": c[1]})
+    for it in out.get("events", []):
+        if (c := common(it)) and it.get("title"):
+            try:
+                imp = max(0.0, min(1.0, float(it.get("importance", 0.5))))
+            except (TypeError, ValueError):
+                imp = 0.5
+            res["events"].append({"title": str(it["title"])[:120], "description": str(it.get("description") or "")[:400],
+                                  "category": it.get("category") if it.get("category") in CATEGORIES else "other", "importance": imp,
+                                  "segment_ids": [s.id for s in c[0]], "start_ms": min(s.start_ms for s in c[0]),
+                                  "end_ms": max(s.end_ms or s.start_ms for s in c[0])})
+    res["events"].sort(key=lambda e: e["start_ms"])
     sm = out.get("summary") or {}
     res["summary"] = {"title": str(sm.get("title") or "").strip(), "executive_summary": sm.get("executive_summary", ""), "topics": sm.get("topics", [])[:10],
                       "key_statements": [{"text": k["text"], "segment_ids": [s.id for s in _ev(k, by_idx)]}
@@ -255,6 +287,18 @@ def llm_extract(segs: list[Seg], ref: date, projects: list[dict]) -> dict:
     if not res["summary"]["executive_summary"]:
         raise ValueError("LLM returned no summary")
     return res
+
+
+CATEGORIES = ("work", "study", "personal", "meeting", "other")
+# kind -> (moment category, title, importance weight); importance = confidence x weight. Mirrored in the phone's Logic.kt.
+MOMENT_KINDS = {"decision": ("decision", "Decision", 1.0), "task": ("reminder", "Task", 1.0), "commitment": ("commitment", "Commitment", 0.9),
+                "idea": ("idea", "Idea", 0.8), "risk": ("work", "Risk", 0.7)}
+
+
+def moment(kind: str, confidence: float) -> Optional[tuple[str, str, float]]:
+    """(category, title, importance) for an extracted item; None for kinds that are not moments (questions)."""
+    k = MOMENT_KINDS.get(kind)
+    return (k[0], k[1], round((confidence or 0) * k[2], 2)) if k else None
 
 
 def extract(segs: list[Seg], ref: date, projects: list[dict]) -> tuple[dict, Optional[str]]:

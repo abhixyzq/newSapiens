@@ -66,7 +66,13 @@ fun AppTheme(content: @Composable () -> Unit) =
 private val fmt = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
 private val timeFmt = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
 fun whenText(ms: Long): String = fmt.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
+fun timeText(ms: Long): String = timeFmt.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
 fun dayOf(ms: Long): LocalDate = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
+
+/** "today" / "yesterday" / "3 Nov" for a timestamp. */
+fun shortDay(ms: Long): String = when (val d = dayOf(ms)) {
+    LocalDate.now() -> "today"; LocalDate.now().minusDays(1) -> "yesterday"; else -> DateTimeFormatter.ofPattern("d MMM").format(d)
+}
 
 /** "Today · 28 min" / "Yesterday · 4:10 PM" style meta line. */
 fun shortWhen(c: Capture): String {
@@ -84,7 +90,7 @@ fun statusText(c: Capture) = when (c.status) {
     else -> "Failed — ${c.error ?: "unknown error"}"
 }
 
-fun captureTitle(c: Capture) = if (c.status == "ready") titleOf(c.summary) else "New capture"
+fun captureTitle(c: Capture) = if (c.status == "ready") c.title.ifBlank { titleOf(c.summary) } else "New capture"
 
 /** "2026-11-03" -> "3 Nov"; anything unparseable is shown as-is. */
 fun dueText(iso: String): String = try { DateTimeFormatter.ofPattern("d MMM").format(LocalDate.parse(iso)) } catch (e: Exception) { iso }

@@ -15,6 +15,8 @@ export default {
         ok: "rgb(var(--ok) / <alpha-value>)",
         warn: "rgb(var(--warn) / <alpha-value>)",
         bad: "rgb(var(--bad) / <alpha-value>)",
+        soft: "rgb(var(--soft) / <alpha-value>)",
+        "soft-ink": "rgb(var(--soft-ink) / <alpha-value>)",
       },
       fontFamily: { sans: ["Inter", "ui-sans-serif", "system-ui", "Segoe UI", "Roboto", "Noto Sans Devanagari", "sans-serif"] },
     },

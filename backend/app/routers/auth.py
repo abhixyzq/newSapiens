@@ -21,7 +21,7 @@ class RegisterIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=10, max_length=200)
     name: str = Field(min_length=1, max_length=200)
-    timezone: str = "UTC"
+    timezone: str = "Asia/Kolkata"
 
 
 class LoginIn(BaseModel):
@@ -55,7 +55,7 @@ def register(body: RegisterIn, request: Request, response: Response, db: Session
     try:
         ZoneInfo(body.timezone)
     except Exception:
-        body.timezone = "UTC"  # unknown zone from the client: start on UTC; the user can change it in Settings
+        body.timezone = "Asia/Kolkata"  # unknown zone from the client: start on the default zone; the user can change it in Settings
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, "Email already registered")
     u = User(email=email, name=body.name.strip(), password_hash=hash_password(body.password), timezone=body.timezone)

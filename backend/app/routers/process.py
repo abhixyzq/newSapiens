@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from ..config import get_settings
 from ..db import utcnow
 from ..deps import require_api_token
-from ..services import extraction, llm, stt
+from ..services import day, extraction, llm, stt
 from .sessions import AUDIO_EXT
 
 router = APIRouter(prefix="/api", tags=["process"])
@@ -46,19 +46,20 @@ def process(file: UploadFile = File(...), language: Optional[str] = Form(None), 
         ref = (datetime.fromisoformat(occurred_at) if occurred_at else utcnow()).date()
     except ValueError:
         raise HTTPException(422, "occurred_at must be ISO 8601")
-    segs = [extraction.Seg(str(i), i, g.start_ms, g.speaker, g.text) for i, g in enumerate(res.segments)]
+    segs = [extraction.Seg(str(i), i, g.start_ms, g.speaker, g.text, g.end_ms) for i, g in enumerate(res.segments)]
     out = {"language": res.language, "duration_s": res.duration_s,
            "segments": [{"idx": i, "start_ms": g.start_ms, "end_ms": g.end_ms, "speaker": g.speaker, "text": g.text,
                          "confidence": g.confidence} for i, g in enumerate(res.segments)]}
     if not segs:  # silence: nothing to extract
         return {**out, "engine": None, "note": "No speech detected", "summary": None, "decisions": [], "tasks": [],
-                "commitments": [], "insights": []}
+                "commitments": [], "insights": [], "events": [], "processed_at": utcnow().isoformat() + "Z"}
     try:
         ex, note = extraction.extract(segs, ref, [])
     except stt.ProviderError as e:
         raise HTTPException(503, str(e))
     return {**out, "engine": ex["engine"], "note": note, "summary": ex["summary"], "decisions": ex["decisions"],
-            "tasks": ex["tasks"], "commitments": ex["commitments"], "insights": ex["insights"]}
+            "tasks": ex["tasks"], "commitments": ex["commitments"], "insights": ex["insights"], "events": ex["events"],
+            "processed_at": utcnow().isoformat() + "Z"}
 
 
 ASK_BUDGET = 16000  # chars of memories per question
@@ -96,4 +97,18 @@ def ask(body: AskBody):
     try:
         return {"answer": llm.get_llm().complete(ASK_PROMPT, user, max_tokens=1000).strip()}
     except (stt.ProviderNotConfigured, stt.ProviderError) as e:
+        raise HTTPException(503, str(e))
+
+
+class DayBody(BaseModel):
+    today: str = Field(max_length=40)
+    items: list[str] = Field(min_length=1, max_length=200)
+
+
+@router.post("/day", dependencies=[Depends(require_api_token)])
+def day_summary(body: DayBody):
+    """Stateless day consolidation for the phone: it sends that day's per-capture summaries and event titles."""
+    try:
+        return day.summarize_day([i[:2000] for i in body.items], body.today)
+    except (stt.ProviderNotConfigured, stt.ProviderError, ValueError) as e:
         raise HTTPException(503, str(e))

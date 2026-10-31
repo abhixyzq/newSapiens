@@ -7,8 +7,8 @@ import { ErrorNote } from "./ui";
 
 type Mode = "record" | "upload" | "transcript";
 
-/** Explicit, visible, consent-gated capture. Uses the browser's own microphone permission prompt; nothing records
- *  until the user ticks consent and presses Start. Chunks upload every 10 s with retry; uploads can be resumed. */
+/** One-tap, visible capture. Uses the browser's own microphone permission prompt; nothing records
+ *  until the user presses Start (that press is the self-recording attestation). Chunks upload every 10 s with retry; uploads can be resumed. */
 export function NewSession({ onDone }: { onDone: (id: string) => void }) {
   const { ws } = useApp();
   const [mode, setMode] = useState<Mode>("record");
@@ -16,9 +16,8 @@ export function NewSession({ onDone }: { onDone: (id: string) => void }) {
   const [kind, setKind] = useState<"meeting" | "conversation" | "voice_note">("conversation");
   const [shared, setShared] = useState(false);
   const [sensitive, setSensitive] = useState(false);
-  const [others, setOthers] = useState(false);
   const [consent, setConsent] = useState(false);
-  const [notified, setNotified] = useState(false);
+  const [others, setOthers] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState("");
   const [when, setWhen] = useState("");
@@ -40,9 +39,8 @@ export function NewSession({ onDone }: { onDone: (id: string) => void }) {
   }, [state]);
   useEffect(() => () => stream.current?.getTracks().forEach((t) => t.stop()), []);
 
-  const needNotice = kind === "meeting" || others;
-  const create = async (source: string, consentBody: any) => {
-    const body: any = { title: title || "Untitled session", kind, source, visibility: shared ? "shared" : "private", exclude_from_processing: sensitive, consent: consentBody };
+  const create = async (source: string, consentBody: any, k = kind) => {
+    const body: any = { title: title || "Untitled session", kind: k, source, visibility: shared ? "shared" : "private", exclude_from_processing: sensitive, consent: consentBody };
     if (when) body.occurred_at = new Date(when).toISOString();
     const s = await api("/api/sessions", { json: body });
     return s.id as string;
@@ -61,11 +59,11 @@ export function NewSession({ onDone }: { onDone: (id: string) => void }) {
 
   const start = async () => {
     setErr(null);
-    if (!consent || (needNotice && !notified)) return setErr("Please confirm recording consent first.");
     try {
       const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.current = ms;
-      sid.current = await create("mic_desktop", { self_recording: true, has_other_participants: others, participants_notified: notified, statement: "Confirmed in-app before recording" });
+      sid.current = await create("mic_desktop", { self_recording: true, has_other_participants: others, participants_notified: others,
+        statement: others ? "User pressed Start recording after confirming the others present know they are being recorded" : "User pressed Start recording; recording visible on screen until Stop" }, "conversation");
       await api(`/api/sessions/${sid.current}/start`, { method: "POST" });
       const mt = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
       const r = new MediaRecorder(ms, mt ? { mimeType: mt } : undefined);
@@ -119,7 +117,16 @@ export function NewSession({ onDone }: { onDone: (id: string) => void }) {
           </span>
         </div>
       )}
-      {!live && (
+      {!live && mode === "record" && (
+        <div className="flex flex-col items-center gap-3 py-6 text-center">
+          <button className="btn btn-primary px-6 py-3 text-base" onClick={start}><Mic size={18} /> Start recording</button>
+          <p className="text-xs text-mute">Stays visible on screen and stops when you press Stop.</p>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={others} onChange={(e) => setOthers(e.target.checked)} /> Others are here and know I'm recording</label>
+          <ErrorNote error={err} />
+          <button className="text-xs text-mute underline" onClick={() => setMode("upload")}>Upload audio or paste a transcript instead</button>
+        </div>
+      )}
+      {!live && mode !== "record" && (
         <>
           <div role="tablist" className="mb-4 flex gap-1 rounded-lg bg-bg p-1 text-sm">
             {([["record", "Record", Mic], ["upload", "Upload audio", Upload], ["transcript", "Paste transcript", Upload]] as const).map(([m, l, I]) => (
@@ -130,21 +137,18 @@ export function NewSession({ onDone }: { onDone: (id: string) => void }) {
             <div><label className="label" htmlFor="t">Title</label><input id="t" className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Website redesign review" /></div>
             <div><label className="label" htmlFor="k">Type</label>
               <select id="k" className="input" value={kind} onChange={(e) => setKind(e.target.value as any)}><option value="conversation">Conversation</option><option value="meeting">Meeting</option><option value="voice_note">Voice note</option></select></div>
-            {mode !== "record" && <div><label className="label" htmlFor="w">When did it happen? (optional)</label><input id="w" type="datetime-local" className="input" value={when} onChange={(e) => setWhen(e.target.value)} /></div>}
+            <div><label className="label" htmlFor="w">When did it happen? (optional)</label><input id="w" type="datetime-local" className="input" value={when} onChange={(e) => setWhen(e.target.value)} /></div>
             {mode === "upload" && <div><label className="label" htmlFor="f">Audio file</label><input id="f" type="file" accept="audio/*,video/mp4,video/webm,.m4a,.opus" className="input" onChange={(e) => setFile(e.target.files?.[0] || null)} /></div>}
           </div>
           {mode === "transcript" && <div className="mt-3"><label className="label" htmlFor="tx">Transcript (<code>[mm:ss] Speaker: text</code> per line)</label><textarea id="tx" rows={7} className="input font-mono text-xs" value={text} onChange={(e) => setText(e.target.value)} /></div>}
           <div className="mt-4 space-y-2 text-sm">
-            {mode === "record" && <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={others} onChange={(e) => setOthers(e.target.checked)} /> Other people can be heard in this recording</label>}
-            {mode === "record" && needNotice && <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={notified} onChange={(e) => setNotified(e.target.checked)} /> I have told all participants that this conversation is being recorded and they agree.</label>}
             <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-              {mode === "record" ? "I am starting this recording myself and I am entitled to record it. Recording is visible on screen and stops when I press Stop." : "I have the right to process this recording/transcript."}</label>
+              I have the right to process this recording/transcript.</label>
             {ws.type !== "individual" && <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={shared} onChange={(e) => setShared(e.target.checked)} /> Share with everyone in “{ws.name}” (otherwise only you can see it)</label>}
             <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={sensitive} onChange={(e) => setSensitive(e.target.checked)} /> Sensitive — store only; do not transcribe, analyse, search or report on it</label>
           </div>
           <div className="mt-4"><ErrorNote error={err} /></div>
-          <div className="mt-4">{mode === "record" ? <button className="btn btn-primary" onClick={start}><Mic size={14} /> Start recording</button>
-            : <button className="btn btn-primary" onClick={submitFile} disabled={busy}>{busy ? "Uploading…" : mode === "upload" ? "Upload & process" : "Import & process"}</button>}</div>
+          <div className="mt-4"><button className="btn btn-primary" onClick={submitFile} disabled={busy}>{busy ? "Uploading…" : mode === "upload" ? "Upload & process" : "Import & process"}</button></div>
         </>
       )}
       {live && <div className="mt-3"><ErrorNote error={err} /></div>}

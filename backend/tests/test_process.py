@@ -117,3 +117,45 @@ def test_ask_answers_from_sent_memories(client):
     assert "x" * 3001 not in f.user  # each memory capped
     assert client.post("/api/ask", headers=AUTH, json={"question": "hi"}).status_code == 503  # rule_based: no LLM
     assert client.post("/api/ask", headers=AUTH, json={"question": ""}).status_code == 422
+
+
+def test_process_events_use_evidence_offsets(client, fake_stt):
+    import json
+    from app.services import llm
+
+    class FakeLLM(llm.LLM):
+        name = "fake"
+        def complete(self, system, user, **kw):
+            return json.dumps({"summary": {"title": "Launch review", "executive_summary": "Pricing review."},
+                               "decisions": [{"text": "Three tier pricing", "evidence": [1], "confidence": 0.9}],
+                               "events": [{"title": "Pricing decision", "description": "Picked three tiers.", "category": "work",
+                                           "importance": 0.9, "evidence": [1, 2]},
+                                          {"title": "Invented", "category": "work", "importance": 1, "evidence": [99]}]})
+    llm.set_provider(FakeLLM())
+    try:
+        j = post(client, occurred_at="2026-10-30T10:00:00").json()
+    finally:
+        llm.set_provider(None)
+    assert [e["title"] for e in j["events"]] == ["Pricing decision"]  # uncited event dropped
+    assert j["events"][0]["start_ms"] == 5000 and j["events"][0]["end_ms"] == 14000 and j["processed_at"]
+
+
+def test_day_summary(client):
+    from app.services import llm
+
+    class FakeLLM(llm.LLM):
+        name = "fake"
+        def complete(self, system, user, **kw):
+            self.user = user
+            return '{"summary": "You picked three tier pricing.", "highlights": ["Pricing decided", ""]}'
+    body = {"today": "2026-10-31", "items": ["10:30 Pricing decision — picked three tiers"]}
+    assert client.post("/api/day", headers=AUTH, json=body).status_code == 503  # no LLM: phone keeps event titles
+    f = FakeLLM()
+    llm.set_provider(f)
+    try:
+        r = client.post("/api/day", headers=AUTH, json=body)
+    finally:
+        llm.set_provider(None)
+    assert r.json() == {"summary": "You picked three tier pricing.", "highlights": ["Pricing decided"]}
+    assert "10:30 Pricing decision" in f.user
+    assert client.post("/api/day", headers=AUTH, json={"today": "x", "items": []}).status_code == 422

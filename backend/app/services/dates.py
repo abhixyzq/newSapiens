@@ -1,5 +1,5 @@
 import re
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from typing import Optional
 
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -91,3 +91,28 @@ def parse_due(text: str, ref: date) -> tuple[Optional[date], Optional[str]]:
     if m := re.search(r"\b(next week|next month|this week|this month|soon|asap|next quarter|by the end of the year)\b", t):
         return None, m[0]
     return None, None
+
+
+_TIME = re.compile(r"\b(?:(subah|sham|shaam|raat|dopahar)\s+)?(\d{1,2})(?:[:.](\d{2}))?(?:\s*(a\.?m\b\.?|p\.?m\b\.?|o'?clock|baje))?"
+                   r"(?:\s+(?:in the\s+|at\s+)?(morning|afternoon|evening|night|tonight))?", re.I)
+
+
+def parse_time(text: Optional[str]) -> Optional[time]:
+    """Clock time in a spoken phrase ("at 5 in the morning", "5:30 pm", "subah 6 baje", "noon"), else None.
+    A bare number ("at 5") is too ambiguous and is ignored."""
+    t = (text or "").lower()
+    if re.search(r"\bnoon\b", t):
+        return time(12, 0)
+    if re.search(r"\bmidnight\b", t):
+        return time(0, 0)
+    for m in _TIME.finditer(t):
+        pre, h, mi, mark, part = m[1], int(m[2]), int(m[3] or 0), (m[4] or "").replace(".", ""), m[5]
+        if not (pre or mark or part or m[3]) or h > 23 or mi > 59:
+            continue
+        pm = mark == "pm" or (pre or part or "") in ("afternoon", "evening", "night", "tonight", "sham", "shaam", "raat", "dopahar")
+        if mark == "am" and h == 12:
+            h = 0
+        elif pm and h < 12 and not (h <= 4 and (part or pre) in ("night", "raat")):  # "2 at night" stays 02:00
+            h += 12
+        return time(h, mi)
+    return None

@@ -12,7 +12,7 @@ export default function Analytics() {
   const max = Math.max(1, ...a.per_day.map((d: any) => d.duration_seconds));
   return (
     <>
-      <PageHeader title="Analytics" sub={a.note} actions={<select aria-label="Range" className="input w-auto" value={days} onChange={(e) => setDays(+e.target.value)}><option value={7}>7 days</option><option value={30}>30 days</option><option value={90}>90 days</option></select>} />
+      <PageHeader title="Insights" sub={a.note} actions={<select aria-label="Range" className="input w-auto" value={days} onChange={(e) => setDays(+e.target.value)}><option value={7}>7 days</option><option value={30}>30 days</option><option value={90}>90 days</option></select>} />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Tasks created" value={a.tasks.created_in_range} hint="AI-detected + manual" />
         <Stat label="Tasks completed" value={a.tasks.completed_in_range} />

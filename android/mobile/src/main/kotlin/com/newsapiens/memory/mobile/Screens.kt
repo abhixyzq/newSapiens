@@ -81,6 +81,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.LocalDate
 import java.time.ZoneId
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -129,7 +146,7 @@ fun MemoryScreen(onOpen: (Long) -> Unit) {
     val cs = MaterialTheme.colorScheme
 
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Header("Memory")
+        Header("Search")
         OutlinedTextField(
             query, { query = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(16.dp),
             placeholder = { Text("Search your memories…") }, leadingIcon = { Icon(Icons.Rounded.Search, null) },
@@ -160,7 +177,7 @@ fun MemoryScreen(onOpen: (Long) -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun DetailScreen(id: Long, onBack: () -> Unit) {
+fun DetailScreen(id: Long, focusLine: Int? = null, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val dao = remember { Db.get(ctx).dao() }
     val scope = rememberCoroutineScope()
@@ -168,11 +185,11 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
     val decisions by dao.decisions(id).collectAsState(emptyList())
     val tasks by dao.tasks(id).collectAsState(emptyList())
     var msg by remember { mutableStateOf<String?>(null) }
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(if (focusLine != null) 1 else 0) }  // opened from a moment: show its evidence
     val cs = MaterialTheme.colorScheme
 
     fun addToCalendar() = scope.launch {
-        val n = CalendarSync.addDue(ctx, dao, id)
+        val n = CalendarSync.addDue(ctx, dao, dao.unsyncedDue(id))
         msg = when {
             n < 0 -> "No writable calendar on this phone — add a Google account first"
             n == 0 -> "No dated tasks left to add"
@@ -206,6 +223,9 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
                 Spacer(Modifier.width(6.dp))
                 Text(listOfNotNull(whenText(c.startedAt), minutes(c)).joinToString(" · "), style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
             }
+            c.processedAt?.let {  // processing time is shown, never used as the conversation time
+                Text("Recorded ${timeText(c.startedAt)} · analysed ${timeText(it)}", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            }
             if (c.status != "ready") {
                 Card { Text(statusText(c)) }
                 if (c.status == "failed") Button({ scope.launch { dao.updateCapture(c.copy(status = "queued", error = null)); ProcessWorker.enqueue(ctx, id) } }) { Text("Retry") }
@@ -213,7 +233,7 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
             }
             Segmented(listOf("Summary", "Transcript"), tab, { tab = it }, Modifier.fillMaxWidth())
             if (tab == 1) {
-                Card { Text(c.transcript.ifBlank { "(empty)" }, style = MaterialTheme.typography.bodyMedium, lineHeight = 22.sp) }
+                Card { Transcript(c, focusLine) }
             } else {
                 Card {
                     IconTitle(Icons.Rounded.Description, "Summary")
@@ -256,7 +276,7 @@ private fun Chip(text: String) = Text(
 )
 
 @Composable
-private fun TaskRow(t: ActionItem, onClick: (() -> Unit)? = null, onToggle: (Boolean) -> Unit) {
+fun TaskRow(t: ActionItem, onClick: (() -> Unit)? = null, onToggle: (Boolean) -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
@@ -264,9 +284,105 @@ private fun TaskRow(t: ActionItem, onClick: (() -> Unit)? = null, onToggle: (Boo
         Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
             Text(t.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
                 textDecoration = if (t.done) TextDecoration.LineThrough else null, color = if (t.done) cs.onSurfaceVariant else cs.onSurface)
-            val due = t.dueDate?.let(::dueText) ?: t.dueText?.let { "“$it”" }
-            val meta = listOfNotNull(t.assignee, due?.let { "Due: $it" }, if (t.calendarEventId != null) "✓ calendar" else null).joinToString(" · ")
-            if (meta.isNotEmpty()) Text(meta, style = MaterialTheme.typography.labelMedium, color = if (due != null && !t.done) cs.error else cs.onSurfaceVariant)
+            if (t.dueDate == null && t.dueText != null && !t.done)  // spoken date, never guessed: the user picks the real one
+                Text("Confirm date: “${t.dueText}”", style = MaterialTheme.typography.labelMedium, color = cs.error)
+            val meta = listOfNotNull(t.assignee, t.dueDate?.let { "Due: ${dueText(it)}" + (t.dueTime?.let { tm -> " $tm" } ?: "") }, if (t.calendarEventId != null) "✓ reminder" else null,
+                t.atMs?.let { "said ${shortDay(it)} ${timeText(it)}" }).joinToString(" · ")
+            if (meta.isNotEmpty()) Text(meta, style = MaterialTheme.typography.labelMedium, color = if (t.dueDate != null && !t.done) cs.error else cs.onSurfaceVariant)
+        }
+    }
+}
+
+private val TimeCol = 76.dp  // fits "12:05 AM"
+
+/** Transcript with each line at its real clock time; [focus] (the evidence line) is highlighted and scrolled into view. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun Transcript(c: Capture, focus: Int?) {
+    val cs = MaterialTheme.colorScheme
+    val lines = c.transcript.lines().filter { it.isNotBlank() }
+    if (lines.isEmpty()) { Text("(empty)"); return }
+    val bring = remember { BringIntoViewRequester() }
+    LaunchedEffect(focus) { if (focus != null) { delay(150); bring.bringIntoView() } }
+    lines.forEachIndexed { i, l ->
+        val off = lineOffsetMs(l)
+        val on = i == focus
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(if (on) cs.primaryContainer else Color.Transparent)
+            .then(if (on) Modifier.bringIntoViewRequester(bring) else Modifier).padding(horizontal = 6.dp, vertical = 3.dp)) {
+            Text(off?.let { timeText(c.startedAt + it) } ?: "", Modifier.width(TimeCol), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text(l.substringAfter("] ", l), style = MaterialTheme.typography.bodyMedium, lineHeight = 21.sp)
+        }
+    }
+}
+
+/** "10:35  Decision  ·  Picked PostgreSQL" row used on Home. */
+@Composable
+fun MomentRow(m: Moment, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(vertical = 8.dp, horizontal = 2.dp)) {
+        Text(timeText(m.atMs), Modifier.width(TimeCol), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+        Column(Modifier.weight(1f)) {
+            Text(m.title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = cs.primary)
+            Text(m.text, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+// ---------- Timeline ----------
+
+@Composable
+fun TimelineScreen(onOpen: (Long, Int?) -> Unit) {
+    val ctx = LocalContext.current
+    val dao = remember { Db.get(ctx).dao() }
+    var day by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
+    val d = LocalDate.parse(day)
+    val (from, to) = remember(day) { dayRange(d) }
+    val caps by remember(day) { dao.capturesBetween(from, to) }.collectAsState(emptyList())
+    val stored by remember(day) { dao.eventsBetween(from, to) }.collectAsState(emptyList())
+    val cs = MaterialTheme.colorScheme
+
+    // captures analysed before events existed still show, as one event spanning the real recording
+    val withEvents = stored.map { it.captureId }.toSet()
+    val legacy = caps.filter { it.status == "ready" && it.id !in withEvents && it.transcript.isNotBlank() }.map {
+        Event(captureId = it.id, title = captureTitle(it), description = "", category = "other", startMs = it.startedAt,
+            endMs = it.startedAt + ((it.durationS ?: 0.0) * 1000).toLong(), importance = 0.5, line = null)
+    }
+    val events = mergeEvents((stored.filter { it.importance >= 0.3 } + legacy).sortedBy { it.startMs })
+    val pending = caps.count { it.status != "ready" && it.status != "failed" }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+        Row(Modifier.padding(top = 12.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Timeline", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            IconButton({ day = d.minusDays(1).toString() }) { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Previous day") }
+            Text(when (d) { LocalDate.now() -> "Today"; LocalDate.now().minusDays(1) -> "Yesterday"; else -> d.format(DateTimeFormatter.ofPattern("EEE, d MMM")) },
+                style = MaterialTheme.typography.labelLarge)
+            IconButton({ day = d.plusDays(1).toString() }, enabled = d < LocalDate.now()) { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, "Next day") }
+        }
+        if (pending > 0) Text("${plural(pending, "capture")} still processing…", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        if (events.isEmpty()) Text("Nothing captured this day.", color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp))
+        LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+            itemsIndexed(events, key = { _, e -> "${e.captureId}-${e.startMs}-${e.title}" }) { i, e ->
+                val gap = if (i > 0) (e.startMs - events.take(i).maxOf { it.endMs }) / 60_000 else 0
+                if (gap >= 15) Text("— ${if (gap >= 60) "${gap / 60}h ${gap % 60}m" else "${gap}m"} with nothing captured —",
+                    Modifier.padding(start = TimeCol, top = 4.dp, bottom = 8.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onOpen(e.captureId, e.line) }.padding(vertical = 8.dp)) {
+                    Column(Modifier.width(TimeCol)) {
+                        Text(timeText(e.startMs), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        Text(timeText(e.endMs), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                    }
+                    Box(Modifier.padding(top = 5.dp, end = 12.dp).size(8.dp).clip(CircleShape).background(cs.primary))
+                    Column(Modifier.weight(1f)) {
+                        Text(e.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Text("${e.category.replaceFirstChar { it.uppercase() }} · ${spokenText((e.endMs - e.startMs) / 1000.0)}",
+                            style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        if (e.description.isNotBlank()) Text(e.description, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+                    }
+                }
+            }
+            item {
+                Text("Times are when you spoke, not when it was analysed. Titles are AI-written — tap an event to read the transcript.",
+                    Modifier.padding(top = 12.dp), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            }
         }
     }
 }
@@ -275,7 +391,7 @@ private fun TaskRow(t: ActionItem, onClick: (() -> Unit)? = null, onToggle: (Boo
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun InsightsScreen() {
+fun InsightsScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
     val dao = remember { Db.get(ctx).dao() }
     val all by dao.captures().collectAsState(emptyList())
@@ -295,7 +411,10 @@ fun InsightsScreen() {
     val period = listOf("Today", "This week", "This month")[range]
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Header("Insights")
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
+            Text("Insights", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        }
         Segmented(listOf("Day", "Week", "Month"), range, { range = it }, Modifier.fillMaxWidth())
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(cs.primaryContainer).padding(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -353,27 +472,86 @@ fun InsightsScreen() {
     }
 }
 
-// ---------- Actions ----------
+// ---------- Tasks ----------
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ActionsScreen(onOpen: (Long) -> Unit) {
+fun TasksScreen(onOpen: (Long, Int?) -> Unit) {
     val ctx = LocalContext.current
     val dao = remember { Db.get(ctx).dao() }
     val scope = rememberCoroutineScope()
     val tasks by dao.allTasks().collectAsState(emptyList())
     var filter by rememberSaveable { mutableIntStateOf(0) }
-    val open = tasks.count { !it.done }
-    val shown = when (filter) { 0 -> tasks.filter { !it.done }; 1 -> tasks.filter { it.done }; else -> tasks }
+    var editing by remember { mutableStateOf<ActionItem?>(null) }
+    val (now, upcoming, unconfirmed) = taskBuckets(tasks, LocalDate.now())
+    val shown = when (filter) { 0 -> unconfirmed + now; 1 -> upcoming; else -> tasks.filter { it.done } }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Header("Actions")
-        Segmented(listOf("Open ($open)", "Done", "All"), filter, { filter = it }, Modifier.fillMaxWidth())
+        Header("Tasks")
+        Segmented(listOf("To do (${now.size + unconfirmed.size})", "Upcoming (${upcoming.size})", "Done"), filter, { filter = it }, Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
-        if (shown.isEmpty()) Text(if (filter == 0) "All clear — nothing open." else "Nothing here yet.",
+        if (shown.isEmpty()) Text(if (filter == 2) "Nothing done yet." else "All clear.",
             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp))
         LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
-            items(shown, key = { it.id }) { t -> TaskRow(t, onClick = { onOpen(t.captureId) }) { scope.launch { dao.setDone(t.id, it) } } }
+            items(shown, key = { it.id }) { t -> TaskRow(t, onClick = { editing = t }) { scope.launch { dao.setDone(t.id, it) } } }
+            item { Text("Extracted by AI from your conversations — tap one to edit, date, remind or delete it.",
+                Modifier.padding(top = 10.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
+    }
+    editing?.let { t -> TaskSheet(t, { editing = null }) { onOpen(t.captureId, t.line) } }
+}
+
+/** Edit / date / remind / delete one task. Dates come only from the user here; spoken phrases stay as hints. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TaskSheet(t: ActionItem, onDismiss: () -> Unit, onSource: () -> Unit) {
+    val ctx = LocalContext.current
+    val dao = remember { Db.get(ctx).dao() }
+    val scope = rememberCoroutineScope()
+    var title by remember { mutableStateOf(t.title) }
+    var desc by remember { mutableStateOf(t.description) }
+    var due by remember { mutableStateOf(t.dueDate) }
+    var picking by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    val edited = { t.copy(title = title.trim().ifEmpty { t.title }, description = desc.trim(), dueDate = due) }
+    fun remind() = scope.launch {
+        dao.updateTask(edited())
+        val n = CalendarSync.addDue(ctx, dao, listOf(edited()))
+        msg = when { n < 0 -> "No writable calendar on this phone"; n == 0 -> "Already in your calendar"; else -> "Added to your calendar" }
+    }
+    val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { g -> if (g.values.all { it }) remind() else msg = "Calendar permission denied" }
+
+    ModalBottomSheet(onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("Task") }, shape = RoundedCornerShape(14.dp))
+            OutlinedTextField(desc, { desc = it }, Modifier.fillMaxWidth(), label = { Text("Description") }, minLines = 2, shape = RoundedCornerShape(14.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(due?.let { "Due ${dueText(it)}" + (t.dueTime?.let { tm -> " at $tm" } ?: "") } ?: t.dueText?.let { "Heard “$it” — pick the date" } ?: "No due date",
+                    Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                TextButton({ picking = true }) { Text(if (due == null) "Set date" else "Change") }
+            }
+            t.atMs?.let { Text("Said ${shortDay(it)} at ${timeText(it)}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button({ scope.launch { dao.updateTask(edited()); onDismiss() } }, Modifier.weight(1f)) { Text("Save") }
+                OutlinedButton({ onDismiss(); onSource() }) { Text("Transcript") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton({
+                    if (due == null) msg = "Set a date first"
+                    else if (CalendarSync.hasPermission(ctx)) remind() else perms.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
+                }, Modifier.weight(1f)) { Text("Remind me") }
+                OutlinedButton({ scope.launch { dao.deleteTask(t.id); onDismiss() } }, Modifier.weight(1f)) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            }
+            msg?.let { Text(it, style = MaterialTheme.typography.labelMedium) }
+        }
+    }
+    if (picking) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = due?.let { allDayRange(LocalDate.parse(it)).first })
+        DatePickerDialog(
+            onDismissRequest = { picking = false },
+            confirmButton = { TextButton({ state.selectedDateMillis?.let { due = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString() }; picking = false }) { Text("OK") } },
+            dismissButton = { TextButton({ picking = false }) { Text("Cancel") } },
+        ) { DatePicker(state) }
     }
 }
 
@@ -387,7 +565,7 @@ fun ProfileScreen() {
     val cs = MaterialTheme.colorScheme
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Header("Profile")
+        Header("Settings")
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(64.dp).clip(CircleShape).background(cs.primary), contentAlignment = Alignment.Center) {
                 Text(name.firstOrNull()?.uppercase() ?: "M", color = cs.onPrimary, fontSize = 26.sp, fontWeight = FontWeight.Bold)

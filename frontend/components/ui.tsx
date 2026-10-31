@@ -6,7 +6,7 @@ export function PageHeader({ title, sub, actions }: { title: string; sub?: strin
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
         {sub && <p className="mt-1 text-sm text-mute">{sub}</p>}
       </div>
       <div className="flex items-center gap-2">{actions}</div>
@@ -75,4 +75,16 @@ export function Spinner() {
 
 export function ErrorNote({ error }: { error?: string | null }) {
   return error ? <p role="alert" className="rounded-lg border border-bad/30 bg-bad/10 px-3 py-2 text-sm text-bad">{error}</p> : null;
+}
+
+/** Pill segmented control, same as the phone app's (To do / Upcoming / Done, Summary / Transcript). */
+export function Segmented<T extends string>({ options, value, onChange, className = "" }: { options: readonly (readonly [T, ReactNode])[]; value: T; onChange: (v: T) => void; className?: string }) {
+  return (
+    <div role="tablist" className={`flex gap-1 rounded-full bg-line/60 p-1 ${className}`}>
+      {options.map(([k, label]) => (
+        <button key={k} role="tab" aria-selected={value === k} onClick={() => onChange(k)}
+          className={`flex-1 rounded-full px-3 py-2 text-sm font-medium transition-colors ${value === k ? "bg-navy text-bg" : "text-mute hover:text-ink"}`}>{label}</button>
+      ))}
+    </div>
+  );
 }

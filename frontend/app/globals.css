@@ -2,26 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Same palette as the phone app (android Theme.kt): lavender primary, near-black "strong" for primary actions. */
 :root {
-  --bg: 246 248 251; --panel: 255 255 255; --line: 226 232 240; --ink: 15 23 42; --mute: 100 116 139;
-  --navy: 11 27 59; --accent: 14 130 170; --ok: 21 128 61; --warn: 180 83 9; --bad: 185 28 28;
+  --bg: 248 247 252; --panel: 255 255 255; --line: 231 228 239; --ink: 17 16 21; --mute: 110 106 124;
+  --navy: 17 16 21; --accent: 107 78 246; --ok: 27 94 42; --warn: 180 83 9; --bad: 229 72 77;
+  --soft: 234 229 255; --soft-ink: 34 18 102;
 }
 .dark {
-  --bg: 8 14 29; --panel: 13 22 43; --line: 30 41 66; --ink: 226 232 240; --mute: 148 163 184;
-  --navy: 11 27 59; --accent: 34 190 230; --ok: 74 222 128; --warn: 251 191 36; --bad: 248 113 113;
+  --bg: 14 13 18; --panel: 24 23 30; --line: 44 42 53; --ink: 243 241 248; --mute: 166 162 180;
+  --navy: 243 241 248; --accent: 169 150 255; --ok: 155 227 172; --warn: 251 191 36; --bad: 255 107 110;
+  --soft: 43 36 80; --soft-ink: 230 224 255;
 }
 html, body { background: rgb(var(--bg)); color: rgb(var(--ink)); }
 body { font-feature-settings: "cv11", "ss01"; -webkit-font-smoothing: antialiased; }
 :focus-visible { outline: 2px solid rgb(var(--accent)); outline-offset: 2px; border-radius: 6px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 @layer components {
-  .card { @apply rounded-xl border border-line bg-panel; }
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-bg disabled:opacity-50 disabled:cursor-not-allowed; }
-  .btn-primary { @apply border-transparent bg-navy text-white hover:bg-navy/90 dark:bg-accent dark:text-[#04121c] dark:hover:bg-accent/90; }
+  .card { @apply rounded-[18px] border border-line bg-panel; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-full border border-line bg-panel px-4 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-bg disabled:opacity-50 disabled:cursor-not-allowed; }
+  .btn-primary { @apply border-transparent bg-navy text-bg hover:bg-navy/90; }
   .btn-danger { @apply border-bad/40 text-bad hover:bg-bad/10; }
-  .input { @apply w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm text-ink placeholder:text-mute focus:border-accent; }
+  .input { @apply w-full rounded-2xl border border-line bg-panel px-3 py-2 text-sm text-ink placeholder:text-mute focus:border-accent; }
   .label { @apply mb-1 block text-xs font-medium text-mute; }
-  .h-section { @apply text-xs font-semibold uppercase tracking-wider text-mute; }
+  .h-section { @apply text-base font-bold text-ink; }
 }
 @keyframes pulse-rec { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
 .rec-dot { animation: pulse-rec 1.4s ease-in-out infinite; }
+@keyframes fade-up { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+.appear { animation: fade-up .35s ease-out; }

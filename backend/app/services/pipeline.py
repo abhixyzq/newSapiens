@@ -3,7 +3,7 @@ a human touched (user_modified / manual / reviewed)."""
 import re
 import traceback
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import delete, select
@@ -12,9 +12,10 @@ from sqlalchemy.orm import Session
 from ..db import SessionLocal, utcnow
 from ..models import (AudioAsset, Commitment, ConversationSummary, ExtractedDecision,
                       ExtractedTask, Insight, KnowledgeChunk, KnowledgeDocument, MemoryEntity, Meeting,
-                      MeetingParticipant, Notification, Project, RecordingSession, Speaker,
-                      TranscriptionSegment, User)
-from . import embeddings, extraction, stt
+                      MeetingParticipant, Notification, Project, RecordingSession, Speaker, TimelineEvent,
+                      TranscriptionSegment, User, Workspace)
+from . import day, embeddings, extraction, stt
+from .rag import local, tzinfo
 from .storage import get_storage
 
 TRANSCRIPT_LINE = re.compile(r"^\s*(?:\[?(?P<ts>(?:\d{1,2}:)?\d{1,2}:\d{2})\]?\s*)?(?:(?P<sp>[^:\n]{1,40}):\s+)?(?P<text>.+)$")
@@ -89,7 +90,7 @@ def load_segs(db: Session, session_id) -> list[extraction.Seg]:
     names = {sp.id: sp.name for sp in db.scalars(select(Speaker).where(Speaker.session_id == session_id))}
     rows = db.scalars(select(TranscriptionSegment).where(TranscriptionSegment.session_id == session_id)
                       .order_by(TranscriptionSegment.idx)).all()
-    return [extraction.Seg(str(r.id), r.idx, r.start_ms, names.get(r.speaker_id), r.text) for r in rows]
+    return [extraction.Seg(str(r.id), r.idx, r.start_ms, names.get(r.speaker_id), r.text, r.end_ms) for r in rows]
 
 
 # -------------------------------------------------------------------------------------------- entities
@@ -177,11 +178,22 @@ def _clear_ai_rows(db: Session, sid):
                                            ExtractedTask.user_modified.is_(False)))
 
 
+def _remind_at(t: dict, tz) -> Optional[datetime]:
+    """UTC moment for a spoken 'date + clock time' deadline; None if either is missing or it is already past."""
+    if not (t.get("due_date") and t.get("due_time")):
+        return None
+    hh, mm = map(int, t["due_time"].split(":"))
+    at = datetime.combine(t["due_date"], datetime.min.time().replace(hour=hh, minute=mm), tzinfo=tz).astimezone(timezone.utc).replace(tzinfo=None)
+    return at if at > utcnow() else None
+
+
 def understand(db: Session, s: RecordingSession) -> dict:
     segs = load_segs(db, s.id)
     projects = [{"id": str(p.id), "name": p.name, "aliases": p.aliases or []}
                 for p in db.scalars(select(Project).where(Project.workspace_id == s.workspace_id, Project.deleted_at.is_(None)))]
-    res, note = extraction.extract(segs, s.occurred_at.date(), projects)
+    ws = db.get(Workspace, s.workspace_id)
+    tz = tzinfo(ws.timezone if ws else "UTC")
+    res, note = extraction.extract(segs, local(s.occurred_at, tz).date(), projects)
     sid, wid = s.id, s.workspace_id
     # link the session to a project only when exactly one project is mentioned most often in the transcript
     if not s.project_id and projects:
@@ -215,7 +227,7 @@ def understand(db: Session, s: RecordingSession) -> dict:
                              title=t["title"], description=t.get("description", ""), assignee_name=t["assignee_name"],
                              assignee_evidence=t["assignee_evidence"], due_date=t["due_date"], due_text=t["due_text"],
                              priority=t["priority"], segment_ids=t["segment_ids"], timestamp_ms=t["timestamp_ms"],
-                             confidence=t["confidence"], status=status,
+                             confidence=t["confidence"], status=status, remind_at=_remind_at(t, tz),
                              project_id=uuid.UUID(t["project_id"]) if t.get("project_id") else s.project_id,
                              history=[{"at": utcnow().isoformat(), "event": "detected", "by": "ai"}]))
         new_tasks += 1
@@ -233,6 +245,12 @@ def understand(db: Session, s: RecordingSession) -> dict:
         db.add(Insight(session_id=sid, workspace_id=wid, kind=i["kind"], text=i["text"], segment_ids=i["segment_ids"],
                        timestamp_ms=i["timestamp_ms"], confidence=i["confidence"]))
 
+    db.execute(delete(TimelineEvent).where(TimelineEvent.session_id == sid))
+    for e in res["events"]:  # speech time = session start + evidence offsets
+        db.add(TimelineEvent(session_id=sid, workspace_id=wid, title=e["title"], description=e["description"], category=e["category"],
+                             start_at=s.occurred_at + timedelta(milliseconds=e["start_ms"]),
+                             end_at=s.occurred_at + timedelta(milliseconds=e["end_ms"]), start_ms=e["start_ms"],
+                             importance=e["importance"], segment_ids=e["segment_ids"]))
     sm = res["summary"]
     if s.title.strip() in ("", "Untitled session") and sm.get("title"):
         s.title = sm["title"][:300]
@@ -303,6 +321,7 @@ def process_session(session_id, *, force=False, retranscribe=False):
         reindex_session(db, s)
         s.status, s.attempts, s.meta = "ready", 0, log
         db.commit()
+        day.refresh_day(db, s)
     except stt.ProviderNotConfigured as e:
         db.rollback()
         s = db.get(RecordingSession, session_id)

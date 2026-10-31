@@ -490,3 +490,36 @@ def test_timezones_are_real_not_silently_utc(alice):
     q = f"What happened in the meeting on {local_day.day} {local_day.strftime('%B')}?"
     out = alice.post("/api/chat", json={"message": q}).json()["message"]["content"]
     assert "Late call" in out and local_day.strftime("%H:%M") in out
+
+
+def test_daily_dashboard_uses_speech_time(alice):
+    from datetime import timedelta
+    from tests.conftest import days_ago, make_session
+    when = days_ago(3, 9)
+    make_session(alice, "Morning sync", when)
+    d = when.strftime("%Y-%m-%d")  # alice is on UTC
+    o = alice.get("/api/dashboard/overview", params={"date": d}).json()
+    assert o["date"] == d and o["speech_seconds"] > 0 and not o["listening"]
+    ev = o["events"]
+    assert ev and ev[0]["time"] == (when + timedelta(seconds=5)).strftime("%H:%M")  # first segment at 00:00:05, not processing time
+    assert [m["at"] for m in o["moments"]] == sorted(m["at"] for m in o["moments"])
+    dec = next(m for m in o["moments"] if m["kind"] == "decision")
+    assert dec["time"] == (when + timedelta(seconds=40)).strftime("%H:%M") and dec["start_ms"] == 40000
+    assert o["daily_summary"] and o["daily_summary"]["highlights"]  # rule-based: event titles, no AI prose
+    empty = alice.get("/api/dashboard/overview", params={"date": days_ago(2).strftime("%Y-%m-%d")}).json()
+    assert empty["events"] == [] and empty["moments"] == [] and empty["daily_summary"] is None
+    assert alice.get("/api/dashboard/overview", params={"date": "31-10-2026"}).status_code == 422
+
+
+# ------------------------------------------------------------------ reminders
+def test_spoken_time_sets_reminder_that_fires_once(alice):
+    import datetime as dt
+    from app.services.scheduler import fire_reminders
+    sid = make_session(alice, title="Errands", kind="conversation", when=days_ago(0), text="[00:01] Alice: Rahul will send the invoice tomorrow at 5 pm.")
+    t = next(t for t in alice.get("/api/tasks").json()["items"] if "invoice" in t["title"].lower())
+    at = dt.datetime.fromisoformat(t["remind_at"].rstrip("Z"))
+    assert at == dt.datetime.combine(days_ago(0).date() + dt.timedelta(days=1), dt.time(17, 0))  # workspace tz is UTC
+    assert fire_reminders(now_utc=at - dt.timedelta(minutes=1)) == 0
+    assert fire_reminders(now_utc=at + dt.timedelta(minutes=1)) == 1
+    assert fire_reminders(now_utc=at + dt.timedelta(minutes=2)) == 0
+    assert any(n["kind"] == "reminder" and "invoice" in n["title"].lower() for n in alice.get("/api/notifications").json())

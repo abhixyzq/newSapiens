@@ -1,4 +1,5 @@
 """Single in-process scheduler thread (run one app instance per DB, or move this to a cron/worker in production):
+ * task reminders: a notification to the task owner at its remind_at minute (once per remind_at)
  * daily report generation at each workspace's local report_time (once per day, skipped if one already exists)
  * audio retention purge (audio files only, per retention_until)
  * recovery of sessions stuck in transcribing/analyzing"""
@@ -9,7 +10,7 @@ from sqlalchemy import select
 
 from ..access import Ctx
 from ..db import SessionLocal, utcnow
-from ..models import AudioAsset, DailyReport, Notification, RecordingSession, User, Workspace
+from ..models import AudioAsset, DailyReport, ExtractedTask, Notification, RecordingSession, User, Workspace
 from . import jobs, pipeline
 from .rag import tzinfo
 from .storage import get_storage
@@ -48,6 +49,28 @@ def run_daily_reports(db=None, now_utc: datetime = None):
         if own:
             db.close()
     return made
+
+
+def fire_reminders(db=None, now_utc: datetime = None):
+    own = db is None
+    db = db or SessionLocal()
+    now_utc = now_utc or utcnow()
+    n = 0
+    try:
+        # the 1-day window keeps the scan small and never fires stale reminders after downtime
+        for t in db.scalars(select(ExtractedTask).where(ExtractedTask.remind_at <= now_utc, ExtractedTask.remind_at > now_utc - timedelta(days=1),
+                                                        ExtractedTask.status.not_in(["completed", "cancelled"]), ExtractedTask.owner_id.is_not(None))):
+            stamp = t.remind_at.isoformat()
+            if any(h.get("event") == "reminded" and h.get("for") == stamp for h in t.history or []):
+                continue
+            db.add(Notification(user_id=t.owner_id, kind="reminder", title=f"Reminder: {t.title}", body=t.due_text or "", link="/tasks"))
+            t.history = [*(t.history or []), {"at": now_utc.isoformat(), "event": "reminded", "for": stamp}]
+            n += 1
+        db.commit()
+    finally:
+        if own:
+            db.close()
+    return n
 
 
 def purge_expired_audio(db=None):
@@ -90,6 +113,7 @@ def _loop():
     while not _stop.wait(60):
         tick += 1
         try:
+            fire_reminders()
             run_daily_reports()
             if tick % 10 == 0:
                 purge_expired_audio()

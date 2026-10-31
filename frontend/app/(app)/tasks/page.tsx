@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useApp } from "@/components/shell";
-import { Badge, Card, Empty, ErrorNote, PageHeader, Spinner, StatusBadge } from "@/components/ui";
+import { Badge, Card, Empty, ErrorNote, PageHeader, Segmented, Spinner, StatusBadge } from "@/components/ui";
 
 const STATUSES = ["detected", "needs_confirmation", "pending", "in_progress", "completed", "cancelled"];
 
@@ -28,7 +28,7 @@ export default function Tasks() {
 
   return (
     <>
-      <PageHeader title="Tasks & Commitments" sub="AI-detected items stay in “Needs review” until you confirm them. Nothing is assigned or sent to anyone automatically." />
+      <PageHeader title="Tasks" sub="Extracted by AI from your conversations. Nothing is assigned or sent to anyone automatically." />
       <ErrorNote error={err} />
       {canWrite && (
         <form className="card mb-6 flex flex-wrap items-end gap-3 p-4" onSubmit={(e) => { e.preventDefault(); if (!n.title.trim()) return; act(async () => { await api("/api/tasks", { json: { title: n.title, assignee: n.assignee || undefined, due_date: n.due_date || undefined } }); setN({ title: "", assignee: "", due_date: "" }); }); }}>
@@ -38,9 +38,7 @@ export default function Tasks() {
           <button className="btn btn-primary">Add</button>
         </form>
       )}
-      <div role="tablist" className="mb-4 flex gap-1 text-sm">
-        {([["open", "Open"], ["review", "Needs review"], ["done", "Done"]] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={`rounded-lg px-3 py-1.5 ${tab === k ? "bg-navy text-white dark:bg-accent dark:text-[#04121c]" : "text-mute hover:bg-panel"}`}>{l}</button>)}
-      </div>
+      <Segmented className="mb-4" value={tab} onChange={setTab} options={[["open", "To do"], ["review", "Needs review"], ["done", "Done"]] as const} />
       {!data ? <Spinner /> : !data.items.length ? <Empty title="No tasks here" hint={tab === "review" ? "Tasks detected from conversations will wait here for you to confirm owner and deadline." : undefined} /> : (
         <div className="card divide-y divide-line">
           {data.items.map((t: any) => (
@@ -51,6 +49,9 @@ export default function Tasks() {
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-mute">
                     <span>{t.assignee ? `Owner: ${t.assignee}` : "No owner identified"}{t.assignee_evidence === "first_person" ? " (speaker, inferred)" : ""}</span>
                     {(t.due_date || t.due_text) && <span>· due {t.due_date || `“${t.due_text}” (no fixed date)`}</span>}
+                    {canWrite && t.due_text && !t.due_date && <label className="text-warn">· confirm date <input type="date" aria-label={`Confirm due date for ${t.title}`} className="input w-auto py-0.5 text-xs" onChange={(e) => e.target.value && patch(t.id, { due_date: e.target.value })} /></label>}
+                    {canWrite ? <label>· remind <input type="datetime-local" aria-label={`Reminder for ${t.title}`} className="input w-auto py-0.5 text-xs" value={localInput(t.remind_at)} onChange={(e) => e.target.value && patch(t.id, { remind_at: new Date(e.target.value).toISOString() })} /></label>
+                      : t.remind_at && <span>· remind {new Date(t.remind_at).toLocaleString()}</span>}
                     <Badge tone={t.priority === "high" ? "bad" : "mute"}>{t.priority}</Badge><StatusBadge status={t.status} />
                     {t.source === "ai" && <Badge tone="info">AI · {Math.round(t.confidence * 100)}%</Badge>}
                     {t.session_id && <Link className="text-accent" href={`/conversations/${t.session_id}?t=${t.timestamp_ms ?? 0}`}>source</Link>}
@@ -84,3 +85,6 @@ export default function Tasks() {
     </>
   );
 }
+
+/** UTC ISO string -> the local "YYYY-MM-DDTHH:mm" a datetime-local input expects. */
+const localInput = (iso?: string | null) => iso ? new Date(new Date(iso).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "";

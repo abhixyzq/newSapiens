@@ -17,7 +17,7 @@ export function SessionList({ kind }: { kind?: string }) {
   }, [load]);
   return (
     <>
-      <input className="input mb-4 max-w-sm" placeholder="Filter by title" value={q} onChange={(e) => { setPage(0); setQ(e.target.value); }} aria-label="Filter" />
+      <input className="input mb-4 rounded-full px-5 py-3" placeholder="Search your conversations…" value={q} onChange={(e) => { setPage(0); setQ(e.target.value); }} aria-label="Filter" />
       {!data ? <Spinner /> : !data.items.length ? <Empty title="Nothing here yet" hint="Captured and imported sessions appear here with their processing status." /> : (
         <div className="card divide-y divide-line">
           {data.items.map((s) => (

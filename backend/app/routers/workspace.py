@@ -12,8 +12,8 @@ from ..access import Ctx, visible_session_filter
 from ..db import get_db, utcnow
 from ..deps import audit, client_ip, require
 from ..models import (Commitment, ExtractedDecision, ExtractedTask, Insight, Integration, MemoryEntity, Notification, Project,
-                      RecordingSession, Speaker)
-from ..services import queries, retrieval
+                      DailySummary, RecordingSession, Speaker, TimelineEvent, TranscriptionSegment)
+from ..services import extraction, queries, retrieval
 from ..services.rag import local, to_utc, tzinfo
 
 router = APIRouter(prefix="/api", tags=["workspace"])
@@ -85,9 +85,13 @@ def delete_project(pid: str, ctx: Ctx = Depends(require("manager")), db: Session
 
 # ------------------------------------------------------------------ dashboard
 @router.get("/dashboard/overview")
-def overview(ctx: Ctx = Depends(require("viewer")), db: Session = Depends(get_db)):
+def overview(date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"), ctx: Ctx = Depends(require("viewer")), db: Session = Depends(get_db)):
     tz = tzinfo(ctx.user.timezone)
-    today = datetime.now(tz).date()
+    now_d = datetime.now(tz).date()
+    try:
+        today = datetime.strptime(date, "%Y-%m-%d").date() if date else now_d
+    except ValueError:
+        raise HTTPException(422, "date must be YYYY-MM-DD")
     s0, s1 = to_utc(today, tz), to_utc(today + timedelta(days=1), tz)
     sess = db.scalars(select(RecordingSession).where(visible_session_filter(ctx), RecordingSession.occurred_at >= s0, RecordingSession.occurred_at < s1)
                       .order_by(RecordingSession.occurred_at)).all()
@@ -123,6 +127,53 @@ def overview(ctx: Ctx = Depends(require("viewer")), db: Session = Depends(get_db
             "questions": [{"id": str(i.id), "text": i.text} for i in db.scalars(queries.insights_q(ctx).where(Insight.kind == "question", Insight.session_id.in_(ids)).limit(4))] if ids else [],
             "ideas": [{"id": str(i.id), "text": i.text} for i in db.scalars(queries.insights_q(ctx).where(Insight.kind == "idea", Insight.session_id.in_(ids)).limit(4))] if ids else []},
         "recommendations": _recs(open_tasks, today),
+        **_day(db, ctx, tz, today, now_d, live, open_tasks),
+    }
+
+
+def _day(db: Session, ctx: Ctx, tz, day, now_d, live, open_tasks) -> dict:
+    """Daily dashboard: every time is speech time (session start + segment offset) in the user's zone; nothing is invented —
+    days without speech come back empty."""
+    by_id = {s.id: s for s in live}
+    ids = list(by_id)
+
+    def at(sid, ms):
+        t = local(by_id[sid].occurred_at + timedelta(milliseconds=ms or 0), tz)
+        return {"at": t.isoformat(), "time": t.strftime("%H:%M")}
+    speech = db.scalar(select(func.sum(TranscriptionSegment.end_ms - TranscriptionSegment.start_ms))
+                       .where(TranscriptionSegment.session_id.in_(ids))) if ids else 0
+    events = db.scalars(select(TimelineEvent).where(TimelineEvent.session_id.in_(ids), TimelineEvent.importance >= 0.3)
+                        .order_by(TimelineEvent.start_at)).all() if ids else []
+    moments = []
+    if ids:
+        rows = [("decision", x, x.text) for x in db.scalars(queries.decisions_q(ctx).where(ExtractedDecision.session_id.in_(ids)))]
+        rows += [("task", x, x.title) for x in db.scalars(queries.tasks_q(ctx).where(ExtractedTask.session_id.in_(ids)))]
+        rows += [("commitment", x, x.text) for x in db.scalars(queries.commitments_q(ctx).where(Commitment.session_id.in_(ids)))]
+        rows += [(x.kind, x, x.text) for x in db.scalars(queries.insights_q(ctx).where(Insight.session_id.in_(ids)))]
+        for kind, x, text in rows:
+            m = extraction.moment(kind, x.confidence)
+            if m and m[2] >= 0.5:
+                moments.append({"id": str(x.id), "kind": kind, "category": m[0], "title": m[1], "text": text, "importance": m[2],
+                                "session_id": str(x.session_id), "start_ms": x.timestamp_ms or 0, **at(x.session_id, x.timestamp_ms)})
+        moments.sort(key=lambda m: m["at"])
+    ds = db.scalar(select(DailySummary).where(DailySummary.user_id == ctx.user.id, DailySummary.workspace_id == ctx.workspace.id,
+                                              DailySummary.date == day))
+    task = lambda t: {"id": str(t.id), "title": t.title, "due_date": t.due_date.isoformat() if t.due_date else None, "due_text": t.due_text,  # noqa: E731
+                      "priority": t.priority, "session_id": str(t.session_id) if t.session_id else None, "start_ms": t.timestamp_ms or 0}
+    return {
+        "listening": bool(db.scalar(select(RecordingSession.id).where(RecordingSession.owner_id == ctx.user.id,
+                                                                      RecordingSession.status == "recording").limit(1))),
+        "speech_seconds": (speech or 0) / 1000,
+        "daily_summary": {"summary": ds.summary, "highlights": ds.highlights, "generated_by": ds.generated_by,
+                          "generated_at": ds.generated_at.isoformat() + "Z"} if ds and ds.source_count else None,
+        "events": [{"id": str(e.id), "title": e.title, "description": e.description, "category": e.category, "importance": e.importance,
+                    "session_id": str(e.session_id), "session_title": by_id[e.session_id].title, "start_ms": e.start_ms,
+                    "start": local(e.start_at, tz).isoformat(), "end": local(e.end_at, tz).isoformat(),
+                    "time": local(e.start_at, tz).strftime("%H:%M"), "end_time": local(e.end_at, tz).strftime("%H:%M")} for e in events],
+        "moments": moments,
+        "tasks": {"today": [task(t) for t in open_tasks if (t.due_date or now_d) <= now_d and not (t.due_text and not t.due_date)],
+                  "upcoming": [task(t) for t in sorted((t for t in open_tasks if t.due_date and t.due_date > now_d), key=lambda t: t.due_date)],
+                  "unconfirmed": [task(t) for t in open_tasks if t.due_text and not t.due_date]},
     }
 
 

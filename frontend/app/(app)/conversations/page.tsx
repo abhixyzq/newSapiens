@@ -13,7 +13,7 @@ function Page() {
   const [show, setShow] = useState(sp.get("new") === "1");
   return (
     <>
-      <PageHeader title="Conversations" sub="Every captured, uploaded or imported session." actions={canWrite && <button className="btn btn-primary" onClick={() => setShow(!show)}>{show ? "Close" : "New session"}</button>} />
+      <PageHeader title="Search" sub="Every captured, uploaded or imported conversation." actions={canWrite && <button className="btn btn-primary" onClick={() => setShow(!show)}>{show ? "Close" : "New session"}</button>} />
       {show && canWrite && <div className="mb-6"><NewSession onDone={(id) => router.push(`/conversations/${id}`)} /></div>}
       <SessionList />
     </>

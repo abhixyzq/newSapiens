@@ -54,7 +54,7 @@ class User(Base, TS, SoftDelete):
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     name: Mapped[str] = mapped_column(String(200))
-    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     audio_retention_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # null = keep until deleted
     stt_languages: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # "en,hi,..." null = server default
@@ -97,7 +97,7 @@ class Workspace(Base, TS, SoftDelete):
     owner_user_id: Mapped[Optional[uuid.UUID]] = fk("users.id", null=True, ondelete="CASCADE")
     organization_id: Mapped[Optional[uuid.UUID]] = fk("organizations.id", null=True)
     report_time: Mapped[str] = mapped_column(String(5), default="18:00")
-    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
     auto_daily_report: Mapped[bool] = mapped_column(Boolean, default=True)
     audio_retention_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
@@ -294,6 +294,39 @@ class Insight(Base, _Extracted):
     text: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="open")
     needs_review: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class TimelineEvent(Base, TS):
+    """One activity in a session, grouped by the LLM from consecutive transcript lines. start_at/end_at are speech time
+    (session occurred_at + evidence segment offsets), never processing time."""
+    __tablename__ = "timeline_events"
+    __table_args__ = (Index("ix_te_ws_start", "workspace_id", "start_at"),)
+    id: Mapped[uuid.UUID] = pk()
+    session_id: Mapped[uuid.UUID] = fk("recording_sessions.id")
+    workspace_id: Mapped[uuid.UUID] = fk("workspaces.id", index=False)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str] = mapped_column(String(20), default="other")  # work|study|personal|meeting|other
+    start_at: Mapped[datetime] = mapped_column(DateTime)
+    end_at: Mapped[datetime] = mapped_column(DateTime)
+    start_ms: Mapped[int] = mapped_column(Integer, default=0)  # offset into the session, for "open transcript here"
+    importance: Mapped[float] = mapped_column(Float, default=0.5)
+    segment_ids: Mapped[Any] = mapped_column(JSON, default=list)
+
+
+class DailySummary(Base, TS):
+    """'Your day at a glance' per user, workspace and local date; generated_at is processing time."""
+    __tablename__ = "daily_summaries"
+    __table_args__ = (UniqueConstraint("user_id", "workspace_id", "date"),)
+    id: Mapped[uuid.UUID] = pk()
+    user_id: Mapped[uuid.UUID] = fk("users.id", index=False)
+    workspace_id: Mapped[uuid.UUID] = fk("workspaces.id", index=False)
+    date: Mapped[date] = mapped_column(Date)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    highlights: Mapped[Any] = mapped_column(JSON, default=list)
+    source_count: Mapped[int] = mapped_column(Integer, default=0)
+    generated_by: Mapped[str] = mapped_column(String(100), default="")
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 # ------------------------------------------------------------------ knowledge / memory
