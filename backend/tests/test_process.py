@@ -63,6 +63,12 @@ def test_process_requires_token(client, fake_stt):
     assert not fake_stt.paths
 
 
+def test_process_open_without_configured_token(client, fake_stt, monkeypatch):
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "api_token", "")
+    assert post(client, headers={}).status_code == 200
+
+
 def test_process_rejects_bad_input(client, fake_stt):
     assert post(client, name="notes.txt").status_code == 415
     assert post(client, data=b"").status_code == 422
@@ -87,3 +93,27 @@ def test_llm_json_tolerates_fences_and_trailing_prose():
         parse_json("sorry, no json")
     with pytest.raises(ValueError):
         parse_json('{"truncated": [1, 2')
+
+
+def test_ask_answers_from_sent_memories(client):
+    from app.services import llm
+
+    class FakeLLM(llm.LLM):
+        name = "fake"
+        def complete(self, system, user, **kw):
+            self.user = user
+            return " You decided on three tier pricing (2026-10-30). "
+
+    f = FakeLLM()
+    llm.set_provider(f)
+    try:
+        r = client.post("/api/ask", headers=AUTH, json={"question": "What did I decide?", "today": "2026-10-31",
+                        "memories": ["2026-10-30: decided three tier pricing", "x" * 20000],
+                        "history": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]})
+    finally:
+        llm.set_provider(None)
+    assert r.status_code == 200 and r.json()["answer"] == "You decided on three tier pricing (2026-10-30)."
+    assert "three tier pricing" in f.user and "TODAY: 2026-10-31" in f.user and "ASSISTANT: hello" in f.user
+    assert "x" * 3001 not in f.user  # each memory capped
+    assert client.post("/api/ask", headers=AUTH, json={"question": "hi"}).status_code == 503  # rule_based: no LLM
+    assert client.post("/api/ask", headers=AUTH, json={"question": ""}).status_code == 422

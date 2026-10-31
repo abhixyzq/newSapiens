@@ -33,10 +33,10 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
 
 
 def require_api_token(authorization: str = Header(default="")):
-    """Static single-user bearer token (API_TOKEN). Disabled (503) until configured."""
+    """Optional static bearer token (API_TOKEN). Empty = endpoint is open (single-user / private network)."""
     expected = get_settings().api_token
     if not expected:
-        raise HTTPException(503, "API_TOKEN is not configured")
+        return
     if not hmac.compare_digest(authorization.removeprefix("Bearer ").encode(), expected.encode()):
         raise HTTPException(401, "Invalid token")
 

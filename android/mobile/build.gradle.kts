@@ -14,12 +14,14 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1"
+        // override per build: ./gradlew assembleDebug -PbackendUrl=http://192.168.1.20:8000
+        buildConfigField("String", "BACKEND_URL", "\"${(findProperty("backendUrl") ?: "http://10.0.2.2:8000").toString().trimEnd('/')}\"")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
@@ -30,6 +32,7 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.06.01"))
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.room:room-runtime:2.7.2")
     implementation("androidx.room:room-ktx:2.7.2")
     ksp("androidx.room:room-compiler:2.7.2")

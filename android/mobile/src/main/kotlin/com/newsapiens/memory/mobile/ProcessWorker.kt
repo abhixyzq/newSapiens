@@ -32,16 +32,13 @@ class ProcessWorker(private val ctx: Context, p: WorkerParameters) : CoroutineWo
 
         val file = Files.audio(ctx, id)
         if (!file.exists()) return fail("Audio file is missing")
-        val url = Prefs.baseUrl(ctx)
-        val token = Prefs.token(ctx)
-        if (url.isEmpty() || token.isEmpty()) return fail("Set the backend URL and token in Settings, then retry")
 
         dao.updateCapture(cap.copy(status = "processing", error = null))
         val occurred = Instant.ofEpochMilli(id).atZone(ZoneId.systemDefault()).toLocalDateTime().toString()
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("file", file.name, file.asRequestBody("audio/mp4".toMediaType()))
             .addFormDataPart("occurred_at", occurred).build()
-        val req = Request.Builder().url("$url/api/process").header("Authorization", "Bearer $token").post(body).build()
+        val req = Request.Builder().url("${BuildConfig.BACKEND_URL}/api/process").post(body).build()
 
         val (code, text) = try {
             client.newCall(req).execute().use { it.code to (it.body?.string() ?: "") }
@@ -66,7 +63,6 @@ class ProcessWorker(private val ctx: Context, p: WorkerParameters) : CoroutineWo
                 fail("Unreadable server response")
             }
             code == 429 || code >= 500 -> retryOrFail(cap, "Server busy ($code): ${detail(text)}")
-            code == 401 -> fail("Rejected (401): check the API token in Settings")
             else -> fail("Server said $code: ${detail(text)}")
         }
     }
@@ -81,7 +77,7 @@ class ProcessWorker(private val ctx: Context, p: WorkerParameters) : CoroutineWo
     private fun detail(body: String) = try { JSONObject(body).optString("detail", body) } catch (e: JSONException) { body }.take(200)
 
     companion object {
-        private val client = OkHttpClient.Builder().readTimeout(180, TimeUnit.SECONDS).writeTimeout(180, TimeUnit.SECONDS).build()
+        val client = OkHttpClient.Builder().readTimeout(180, TimeUnit.SECONDS).writeTimeout(180, TimeUnit.SECONDS).build()
 
         fun enqueue(ctx: Context, id: Long) {
             val req = OneTimeWorkRequestBuilder<ProcessWorker>()

@@ -4,14 +4,15 @@ import os
 import shutil
 import tempfile
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from ..db import utcnow
 from ..deps import require_api_token
-from ..services import extraction, stt
+from ..services import extraction, llm, stt
 from .sessions import AUDIO_EXT
 
 router = APIRouter(prefix="/api", tags=["process"])
@@ -58,3 +59,41 @@ def process(file: UploadFile = File(...), language: Optional[str] = Form(None), 
         raise HTTPException(503, str(e))
     return {**out, "engine": ex["engine"], "note": note, "summary": ex["summary"], "decisions": ex["decisions"],
             "tasks": ex["tasks"], "commitments": ex["commitments"], "insights": ex["insights"]}
+
+
+ASK_BUDGET = 16000  # chars of memories per question
+ASK_PROMPT = ("You are MindCapture, the user's AI second brain. MEMORIES are notes from their own recorded conversations, newest "
+              "first. If the question is about their life, work, meetings, people or tasks, answer from MEMORIES and mention the "
+              "date of each memory you use; if MEMORIES don't cover it, say so in one short line. Anything else, answer from "
+              "general knowledge. Be concise. Plain text only, no markdown; short '- ' lists are fine.")
+
+
+class AskTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=8000)
+
+
+class AskBody(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    today: Optional[str] = Field(None, max_length=40)  # phone's local date, so "yesterday" means the user's yesterday
+    memories: list[str] = Field(default=[], max_length=200)
+    history: list[AskTurn] = Field(default=[], max_length=40)
+
+
+@router.post("/ask", dependencies=[Depends(require_api_token)])
+def ask(body: AskBody):
+    """Stateless Q&A for the phone app: its memories live on the device, so it sends them along with the question."""
+    picked, used = [], 0
+    for m in body.memories:  # ponytail: newest-first char budget (fits Groq's free tier); add retrieval once memories outgrow it
+        m = m[:3000]
+        if used + len(m) > ASK_BUDGET:
+            break
+        picked.append(m)
+        used += len(m)
+    hist = "\n".join(f"{t.role.upper()}: {t.content[:2000]}" for t in body.history[-6:])
+    user = (f"TODAY: {body.today or utcnow().date()}\n\nMEMORIES:\n" + ("\n\n---\n\n".join(picked) or "(none yet)")
+            + (f"\n\nCONVERSATION SO FAR:\n{hist}" if hist else "") + f"\n\nQUESTION:\n{body.question}")
+    try:
+        return {"answer": llm.get_llm().complete(ASK_PROMPT, user, max_tokens=1000).strip()}
+    except (stt.ProviderNotConfigured, stt.ProviderError) as e:
+        raise HTTPException(503, str(e))

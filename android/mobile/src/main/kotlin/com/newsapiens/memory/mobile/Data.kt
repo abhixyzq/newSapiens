@@ -14,6 +14,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /** id = start time (epoch ms) of the recording; it is also the audio file name and the de-dupe key. */
@@ -43,6 +45,7 @@ data class ActionItem(
     val dueText: String?,  // the spoken phrase ("next week") when it was not
     val priority: String,
     @ColumnInfo(defaultValue = "NULL") val calendarEventId: Long? = null,
+    @ColumnInfo(defaultValue = "0") val done: Boolean = false,
 )
 
 @Fts4(contentEntity = Capture::class)
@@ -64,6 +67,9 @@ abstract class MemoryDao {
     @Query("SELECT * FROM ActionItem WHERE captureId = :id AND dueDate IS NOT NULL AND calendarEventId IS NULL")
     abstract suspend fun unsyncedDue(id: Long): List<ActionItem>
     @Query("UPDATE ActionItem SET calendarEventId = :event WHERE id = :id") abstract suspend fun setEvent(id: Long, event: Long)
+    @Query("SELECT * FROM ActionItem ORDER BY id DESC") abstract fun allTasks(): Flow<List<ActionItem>>
+    @Query("SELECT * FROM Decision") abstract fun allDecisions(): Flow<List<Decision>>
+    @Query("UPDATE ActionItem SET done = :done WHERE id = :id") abstract suspend fun setDone(id: Long, done: Boolean)
 
     @Query("SELECT Capture.* FROM Capture JOIN CaptureFts ON Capture.rowid = CaptureFts.rowid WHERE CaptureFts MATCH :q ORDER BY startedAt DESC")
     abstract suspend fun search(q: String): List<Capture>
@@ -79,14 +85,17 @@ abstract class MemoryDao {
     @Transaction open suspend fun deleteCapture(id: Long) { delDecisions(id); delTasks(id); delCapture(id) }
 }
 
-@Database(entities = [Capture::class, Decision::class, ActionItem::class, CaptureFts::class], version = 1, exportSchema = false)
+@Database(entities = [Capture::class, Decision::class, ActionItem::class, CaptureFts::class], version = 2, exportSchema = false)
 abstract class Db : RoomDatabase() {
     abstract fun dao(): MemoryDao
 
     companion object {
         @Volatile private var inst: Db? = null
+        private val v2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) = db.execSQL("ALTER TABLE ActionItem ADD COLUMN done INTEGER NOT NULL DEFAULT 0")
+        }
         fun get(ctx: Context): Db = inst ?: synchronized(this) {
-            inst ?: Room.databaseBuilder(ctx.applicationContext, Db::class.java, "memory.db").build().also { inst = it }
+            inst ?: Room.databaseBuilder(ctx.applicationContext, Db::class.java, "memory.db").addMigrations(v2).build().also { inst = it }
         }
     }
 }

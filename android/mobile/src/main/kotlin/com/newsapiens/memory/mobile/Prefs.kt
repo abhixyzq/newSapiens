@@ -3,12 +3,11 @@ package com.newsapiens.memory.mobile
 import android.content.Context
 import java.io.File
 
-/** Backend URL + API token, in app-private storage. */
+/** User name, in app-private storage. Backend URL is fixed at build time (BuildConfig.BACKEND_URL). */
 object Prefs {
     private fun sp(c: Context) = c.getSharedPreferences("settings", Context.MODE_PRIVATE)
-    fun baseUrl(c: Context) = sp(c).getString("url", "")!!.trim().trimEnd('/')
-    fun token(c: Context) = sp(c).getString("token", "")!!.trim()
-    fun save(c: Context, url: String, token: String) = sp(c).edit().putString("url", url).putString("token", token).apply()
+    fun name(c: Context) = sp(c).getString("name", "")!!.trim()
+    fun save(c: Context, name: String) = sp(c).edit().putString("name", name).apply()
 }
 
 object Files {

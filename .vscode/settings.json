@@ -3,6 +3,6 @@
   "python.analysis.extraPaths": [
     "${workspaceFolder}/backend"
   ],
-  "pyrefly.pythonPath": "${workspaceFolder}/backend/.venv/Scripts/python.exe"
+  "pyrefly.pythonPath": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+  "java.configuration.updateBuildConfiguration": "interactive"
 }
-
