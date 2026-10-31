@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from ..access import Ctx
 from ..db import SessionLocal, utcnow
-from ..models import AudioAsset, DailyReport, ExtractedTask, Notification, RecordingSession, User, Workspace
+from ..models import AudioAsset, DailyReport, ExtractedTask, Notification, RecordingSession, User, Workspace, WorkspaceMember
 from . import jobs, pipeline
 from .rag import tzinfo
 from .storage import get_storage
@@ -59,7 +59,10 @@ def fire_reminders(db=None, now_utc: datetime = None):
     try:
         # the 1-day window keeps the scan small and never fires stale reminders after downtime
         for t in db.scalars(select(ExtractedTask).where(ExtractedTask.remind_at <= now_utc, ExtractedTask.remind_at > now_utc - timedelta(days=1),
-                                                        ExtractedTask.status.not_in(["completed", "cancelled"]), ExtractedTask.owner_id.is_not(None))):
+                                                        ExtractedTask.status.not_in(["completed", "cancelled"]), ExtractedTask.owner_id.is_not(None),
+                                                        ExtractedTask.deleted_at.is_(None),
+                                                        select(WorkspaceMember.id).where(WorkspaceMember.workspace_id == ExtractedTask.workspace_id,
+                                                                                         WorkspaceMember.user_id == ExtractedTask.owner_id).exists())):
             stamp = t.remind_at.isoformat()
             if any(h.get("event") == "reminded" and h.get("for") == stamp for h in t.history or []):
                 continue

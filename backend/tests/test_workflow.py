@@ -522,4 +522,7 @@ def test_spoken_time_sets_reminder_that_fires_once(alice):
     assert fire_reminders(now_utc=at - dt.timedelta(minutes=1)) == 0
     assert fire_reminders(now_utc=at + dt.timedelta(minutes=1)) == 1
     assert fire_reminders(now_utc=at + dt.timedelta(minutes=2)) == 0
+    assert alice.patch(f"/api/tasks/{t['id']}", json={"remind_at": (at + dt.timedelta(hours=1)).isoformat()}).status_code == 200
+    assert alice.delete(f"/api/tasks/{t['id']}").status_code == 200
+    assert fire_reminders(now_utc=at + dt.timedelta(hours=2)) == 0  # deleted tasks never remind
     assert any(n["kind"] == "reminder" and "invoice" in n["title"].lower() for n in alice.get("/api/notifications").json())
