@@ -13,7 +13,7 @@ from ..db import SessionLocal, utcnow
 from ..models import (AudioAsset, Commitment, ConversationSummary, ExtractedDecision,
                       ExtractedTask, Insight, KnowledgeChunk, KnowledgeDocument, MemoryEntity, Meeting,
                       MeetingParticipant, Notification, Project, RecordingSession, Speaker, TimelineEvent,
-                      TranscriptionSegment, User, Workspace)
+                      TranscriptionSegment, Workspace)
 from . import day, embeddings, extraction, stt
 from .rag import local, tzinfo
 from .storage import get_storage
@@ -53,7 +53,7 @@ def save_segments(db: Session, s: RecordingSession, items: list[dict], language=
                 db.flush()
         db.add(TranscriptionSegment(session_id=s.id, workspace_id=s.workspace_id, idx=i, start_ms=it["start_ms"],
                                     end_ms=it["end_ms"], speaker_id=sp.id if sp else None, text=it["text"],
-                                    original_text=it["text"], confidence=it.get("confidence"),
+                                    original_text=it["text"], source_text=it.get("source_text"), confidence=it.get("confidence"),
                                     language=it.get("language") or language))
     db.flush()
 
@@ -303,9 +303,10 @@ def process_session(session_id, *, force=False, retranscribe=False):
             if audio:
                 s.status, s.error = "transcribing", None
                 db.commit()
-                res = stt.get_stt().transcribe(audio, s.language or (db.get(User, s.owner_id).stt_languages))
+                res = stt.get_stt().transcribe(audio)
                 save_segments(db, s, [{"start_ms": g.start_ms, "end_ms": g.end_ms, "text": g.text, "speaker": g.speaker,
-                                       "confidence": g.confidence, "language": g.language} for g in res.segments], res.language)
+                                       "confidence": g.confidence, "language": g.language, "source_text": g.source_text}
+                                      for g in res.segments], res.language)
                 s.language = s.language or res.language
                 s.duration_seconds = res.duration_s or (res.segments[-1].end_ms / 1000 if res.segments else None)
                 log["stt"] = get_stt_name()

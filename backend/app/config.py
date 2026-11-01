@@ -25,7 +25,6 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True
 
     stt_provider: str = "none"
-    stt_languages: str = "en,hi"  # default preferred languages (ISO codes, comma-separated); users can override in Settings
     stt_model: str = "whisper-1"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"

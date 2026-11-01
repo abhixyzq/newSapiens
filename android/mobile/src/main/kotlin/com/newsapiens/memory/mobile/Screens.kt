@@ -231,9 +231,14 @@ fun DetailScreen(id: Long, focusLine: Int? = null, onBack: () -> Unit) {
                 if (c.status == "failed") Button({ scope.launch { dao.updateCapture(c.copy(status = "queued", error = null)); ProcessWorker.enqueue(ctx, id) } }) { Text("Retry") }
                 return@Column
             }
-            Segmented(listOf("Summary", "Transcript"), tab, { tab = it }, Modifier.fillMaxWidth())
-            if (tab == 1) {
-                Card { Transcript(c, focusLine) }
+            Segmented(listOf("Summary", "Translated", "Original"), tab, { tab = it }, Modifier.fillMaxWidth())
+            if (tab > 0) {
+                Card {
+                    val legacy = tab == 2 && c.sourceTranscript.isBlank() && c.language?.lowercase() !in listOf(null, "en", "english")
+                    if (legacy) Text("Original-language text wasn't kept for this older capture; showing English.",
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Transcript(c, if (tab == 2) c.sourceTranscript.ifBlank { c.transcript } else c.transcript, focusLine)
+                }
             } else {
                 Card {
                     IconTitle(Icons.Rounded.Description, "Summary")
@@ -298,9 +303,9 @@ private val TimeCol = 76.dp  // fits "12:05 AM"
 /** Transcript with each line at its real clock time; [focus] (the evidence line) is highlighted and scrolled into view. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Transcript(c: Capture, focus: Int?) {
+private fun Transcript(c: Capture, text: String, focus: Int?) {
     val cs = MaterialTheme.colorScheme
-    val lines = c.transcript.lines().filter { it.isNotBlank() }
+    val lines = text.lines().filter { it.isNotBlank() }
     if (lines.isEmpty()) { Text("(empty)"); return }
     val bring = remember { BringIntoViewRequester() }
     LaunchedEffect(focus) { if (focus != null) { delay(150); bring.bringIntoView() } }

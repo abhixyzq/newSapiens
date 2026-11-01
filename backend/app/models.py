@@ -57,7 +57,6 @@ class User(Base, TS, SoftDelete):
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     audio_retention_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # null = keep until deleted
-    stt_languages: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # "en,hi,..." null = server default
 
 
 class Organization(Base, TS, SoftDelete):
@@ -187,6 +186,7 @@ class TranscriptionSegment(Base, TS):
     speaker_id: Mapped[Optional[uuid.UUID]] = fk("speakers.id", null=True, ondelete="SET NULL")
     text: Mapped[str] = mapped_column(Text)
     original_text: Mapped[str] = mapped_column(Text)  # preserved when a user edits `text`
+    source_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # as spoken, before translation; null = same as text
     edited: Mapped[bool] = mapped_column(Boolean, default=False)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     language: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)

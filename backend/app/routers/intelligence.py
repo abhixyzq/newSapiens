@@ -25,7 +25,7 @@ def transcript(sid: str, ctx: Ctx = Depends(require("viewer")), db: Session = De
     names = {x.id: x for x in db.scalars(select(Speaker).where(Speaker.session_id == s.id))}
     rows = db.scalars(select(TranscriptionSegment).where(TranscriptionSegment.session_id == s.id).order_by(TranscriptionSegment.idx).limit(limit).offset(offset)).all()
     return {"session_id": str(s.id), "segments": [{"id": str(r.id), "idx": r.idx, "start_ms": r.start_ms, "end_ms": r.end_ms, "text": r.text,
-                                                    "original_text": r.original_text if r.edited else None, "edited": r.edited, "confidence": r.confidence,
+                                                    "original_text": r.original_text if r.edited else None, "source_text": r.source_text, "edited": r.edited, "confidence": r.confidence,
                                                     "speaker_id": str(r.speaker_id) if r.speaker_id else None,
                                                     "speaker": names[r.speaker_id].name if r.speaker_id in names else None, "language": r.language} for r in rows]}
 

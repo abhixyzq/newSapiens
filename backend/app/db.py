@@ -50,3 +50,8 @@ def init_db():
         with engine.begin() as c:
             c.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
     Base.metadata.create_all(engine)
+    # ponytail: create_all never alters existing tables; hand-add new columns here until there's a real migration tool
+    from sqlalchemy import inspect
+    if "source_text" not in {c["name"] for c in inspect(engine).get_columns("transcription_segments")}:
+        with engine.begin() as c:
+            c.exec_driver_sql("ALTER TABLE transcription_segments ADD COLUMN source_text TEXT")

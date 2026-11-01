@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api", tags=["process"])
 
 
 @router.post("/process", dependencies=[Depends(require_api_token)])
-def process(file: UploadFile = File(...), language: Optional[str] = Form(None), occurred_at: Optional[str] = Form(None)):
+def process(file: UploadFile = File(...), occurred_at: Optional[str] = Form(None)):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in AUDIO_EXT:
         raise HTTPException(415, f"Unsupported file type {ext or '(none)'}; allowed: {', '.join(sorted(AUDIO_EXT))}")
@@ -34,7 +34,7 @@ def process(file: UploadFile = File(...), language: Optional[str] = Form(None), 
         if size == 0:
             raise HTTPException(422, "Empty file")
         try:
-            res = stt.get_stt().transcribe(path, language)
+            res = stt.get_stt().transcribe(path)
         except (stt.ProviderNotConfigured, stt.ProviderError) as e:
             raise HTTPException(503, str(e))
         except RuntimeError as e:
@@ -49,7 +49,7 @@ def process(file: UploadFile = File(...), language: Optional[str] = Form(None), 
     segs = [extraction.Seg(str(i), i, g.start_ms, g.speaker, g.text, g.end_ms) for i, g in enumerate(res.segments)]
     out = {"language": res.language, "duration_s": res.duration_s,
            "segments": [{"idx": i, "start_ms": g.start_ms, "end_ms": g.end_ms, "speaker": g.speaker, "text": g.text,
-                         "confidence": g.confidence} for i, g in enumerate(res.segments)]}
+                         "source_text": g.source_text, "confidence": g.confidence} for i, g in enumerate(res.segments)]}
     if not segs:  # silence: nothing to extract
         return {**out, "engine": None, "note": "No speech detected", "summary": None, "decisions": [], "tasks": [],
                 "commitments": [], "insights": [], "events": [], "processed_at": utcnow().isoformat() + "Z"}

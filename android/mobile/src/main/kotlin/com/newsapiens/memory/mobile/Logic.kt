@@ -21,6 +21,7 @@ data class Parsed(
     val topics: List<String>, val tasks: List<ParsedTask>, val note: String?,
     val title: String = "", val speechS: Double? = null,
     val moments: List<ParsedMoment> = emptyList(), val events: List<ParsedEvent> = emptyList(),
+    val sourceTranscript: String = "",
 )
 
 private fun JSONObject.str(k: String): String? = if (isNull(k)) null else optString(k).ifBlank { null }
@@ -42,10 +43,11 @@ private fun moment(kind: String, o: JSONObject, text: String): ParsedMoment? = m
 fun parseProcess(body: String): Parsed {
     val j = JSONObject(body)
     val segs = j.objs("segments")
-    val transcript = segs.joinToString("\n") {
+    fun lines(text: (JSONObject) -> String) = segs.joinToString("\n") {
         val ms = it.getLong("start_ms")
-        "[%d:%02d] %s".format(ms / 60000, ms / 1000 % 60, it.getString("text"))
+        "[%d:%02d] %s".format(ms / 60000, ms / 1000 % 60, text(it))
     }
+    val transcript = lines { it.getString("text") }
     val sm = j.optJSONObject("summary")
     val topics = sm?.optJSONArray("topics")
     val tasks = j.objs("tasks")
@@ -57,6 +59,8 @@ fun parseProcess(body: String): Parsed {
         durationS = if (j.isNull("duration_s")) null else j.optDouble("duration_s"),
         language = j.str("language"),
         transcript = transcript,
+        // words as spoken, before translation; empty when the speech was already English (same as transcript)
+        sourceTranscript = if (segs.any { it.str("source_text") != null }) lines { it.str("source_text") ?: it.getString("text") } else "",
         summary = sm?.str("executive_summary") ?: j.str("note") ?: "",
         topics = (0 until (topics?.length() ?: 0)).map { topics!!.getString(it) },
         tasks = tasks.map {

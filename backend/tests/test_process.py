@@ -20,7 +20,7 @@ class FakeSTT:
     def __init__(self, lines=LINES):
         self.lines, self.paths = lines, []
 
-    def transcribe(self, path, language=None):
+    def transcribe(self, path):
         assert os.path.exists(path)
         self.paths.append(path)
         segs = [stt.STTSegment(i * 5000, i * 5000 + 4000, t) for i, t in enumerate(self.lines)]
@@ -159,3 +159,35 @@ def test_day_summary(client):
     assert r.json() == {"summary": "You picked three tier pricing.", "highlights": ["Pricing decided"]}
     assert "10:30 Pricing decision" in f.user
     assert client.post("/api/day", headers=AUTH, json={"today": "x", "items": []}).status_code == 422
+
+
+def test_attach_source_aligns_by_time_overlap():
+    segs = [stt.STTSegment(0, 4000, "I will go to college"), stt.STTSegment(4000, 9000, "at five tomorrow")]
+    stt._attach_source(segs, [(0, 2500, "मैं कॉलेज"), (2500, 4200, "जाऊंगा"), (4300, 9000, "कल पाँच बजे")])
+    assert [g.source_text for g in segs] == ["मैं कॉलेज जाऊंगा", "कल पाँच बजे"]
+    stt._attach_source(segs, [])
+    assert segs[0].source_text is None
+
+
+def test_whisper_hindi_heard_as_urdu_is_devanagari_and_english(tmp_path, monkeypatch):
+    import json
+    from app.services import llm
+    f = tmp_path / "a.webm"
+    f.write_bytes(b"x")
+    calls = []
+    monkeypatch.setattr(stt.OpenAIWhisper, "_post", lambda self, p, ep: calls.append(ep) or {
+        "language": "Urdu", "duration": 4.0, "segments": [{"start": 0, "end": 4, "text": "کل میٹنگ ہے"}]})
+
+    class FakeLLM(llm.LLM):
+        name = "fake"
+        def complete(self, system, user, **kw):
+            assert "Spoken language: Hindi" in user and "Devanagari" in user and "کل میٹنگ ہے" in user
+            return json.dumps({"lines": [{"original": "कल मीटिंग है", "english": "There is a meeting tomorrow"}]})
+    llm.set_provider(FakeLLM())
+    try:
+        r = stt.OpenAIWhisper().transcribe(str(f))
+    finally:
+        llm.set_provider(None)
+    g = r.segments[0]
+    assert (r.language, g.text, g.source_text, calls) == ("Hindi", "There is a meeting tomorrow", "कल मीटिंग है", ["transcriptions"])
+    assert [stt._spoken(x) for x in ("english", "en", "Punjabi", None)] == ["English", "English", "Hindi", "Hindi"]

@@ -291,7 +291,7 @@ class FakeSTT:
     name = "fake"
     calls = 0
 
-    def transcribe(self, path, language=None):
+    def transcribe(self, path):
         FakeSTT.calls += 1
         assert os.path.getsize(path) > 0
         return stt.STTResult([stt.STTSegment(0, 4000, "Lena will prepare the budget report by Friday.", speaker="Lena", confidence=0.9),

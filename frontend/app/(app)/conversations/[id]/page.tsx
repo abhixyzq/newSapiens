@@ -5,7 +5,7 @@ import { Pencil, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmtDateTime, fmtDur, fmtTs } from "@/lib/format";
 import { useApp } from "@/components/shell";
-import { Badge, Card, Empty, ErrorNote, PageHeader, Spinner, StatusBadge } from "@/components/ui";
+import { Badge, Card, Empty, ErrorNote, PageHeader, Segmented, Spinner, StatusBadge } from "@/components/ui";
 
 function Detail({ id }: { id: string }) {
   const { me, ws } = useApp();
@@ -17,6 +17,7 @@ function Detail({ id }: { id: string }) {
   const [audio, setAudio] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [view, setView] = useState<"en" | "orig">("en");
   const player = useRef<HTMLAudioElement>(null);
 
   const load = useCallback(async () => {
@@ -40,6 +41,8 @@ function Detail({ id }: { id: string }) {
   const seek = (ms: number) => { if (player.current) { player.current.currentTime = ms / 1000; player.current.play(); } };
   const act = async (fn: () => Promise<any>) => { setErr(null); try { await fn(); await load(); } catch (e: any) { setErr(e.message); } };
   const review = (kind: string, rid: string, body: any) => act(() => api(`/api/${kind}/${rid}`, { method: "PATCH", json: body }));
+  const orig = view === "orig";
+  const noSource = orig && !segs.some((g) => g.source_text);
 
   return (
     <>
@@ -87,6 +90,9 @@ function Detail({ id }: { id: string }) {
         </div>
       )}
       <Card title={`Transcript (${segs.length})`}>
+        {segs.length > 0 && <Segmented className="mb-3" options={[["en", "Translated"], ["orig", `Original${s.language ? ` (${s.language})` : ""}`]] as const} value={view} onChange={setView} />}
+        {noSource && <p className="mb-3 text-sm text-mute">No separate original-language text for this recording; showing the English text.
+          {owner && audio && <button className="ml-1 text-accent" onClick={() => act(() => api(`/api/intelligence/process/${id}?retranscribe=true`, { method: "POST" }))}>Re-transcribe to fetch it</button>}</p>}
         {!segs.length ? <p className="text-sm text-mute">{["transcribing", "analyzing", "uploaded"].includes(s.status) ? "Processing… this page refreshes automatically." : "No transcript yet."}</p> : (
           <ol className="space-y-1">
             {segs.map((g) => (
@@ -94,7 +100,7 @@ function Detail({ id }: { id: string }) {
                 <button className="w-12 shrink-0 text-right text-xs tabular-nums text-mute hover:text-accent" onClick={() => seek(g.start_ms)}>{fmtTs(g.start_ms)}</button>
                 <div className="min-w-0 flex-1">
                   {g.speaker && <span className="mr-2 font-medium">{g.speaker}</span>}
-                  {editing === g.id ? (
+                  {orig ? <span>{g.source_text || g.text}</span> : editing === g.id ? (
                     <span className="flex gap-2"><textarea className="input" rows={2} value={draft} onChange={(e) => setDraft(e.target.value)} />
                       <button className="btn btn-primary" onClick={() => act(async () => { await api(`/api/transcripts/${g.id}`, { method: "PATCH", json: { text: draft } }); setEditing(null); })}>Save</button>
                       <button className="btn" onClick={() => setEditing(null)}>Cancel</button></span>
@@ -102,7 +108,7 @@ function Detail({ id }: { id: string }) {
                   {g.edited && <span title={`Original: ${g.original_text}`} className="ml-2 text-xs text-mute">(edited)</span>}
                   {g.confidence != null && g.confidence < 0.6 && <span className="ml-2 text-xs text-warn">low confidence</span>}
                 </div>
-                {owner && editing !== g.id && <button className="invisible text-mute hover:text-accent group-hover:visible" aria-label="Edit line" onClick={() => { setEditing(g.id); setDraft(g.text); }}><Pencil size={14} /></button>}
+                {owner && !orig && editing !== g.id && <button className="invisible text-mute hover:text-accent group-hover:visible" aria-label="Edit line" onClick={() => { setEditing(g.id); setDraft(g.text); }}><Pencil size={14} /></button>}
               </li>
             ))}
           </ol>

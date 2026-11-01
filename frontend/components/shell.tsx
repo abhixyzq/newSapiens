@@ -8,7 +8,7 @@ import { api, getWs, setWsStored } from "@/lib/api";
 import { Spinner } from "./ui";
 
 type Workspace = { id: string; name: string; type: string; role: string; organization_id: string | null; report_time: string; timezone: string; auto_daily_report: boolean };
-type Me = { id: string; name: string; email: string; timezone: string; audio_retention_days: number | null; stt_languages: string; workspaces: Workspace[]; organizations: { id: string; name: string; role: string }[] };
+type Me = { id: string; name: string; email: string; timezone: string; audio_retention_days: number | null; workspaces: Workspace[]; organizations: { id: string; name: string; role: string }[] };
 type Ctx = { me: Me; ws: Workspace; switchWs: (id: string) => void; refresh: () => Promise<void>; canWrite: boolean };
 const C = createContext<Ctx>(null as any);
 export const useApp = () => useContext(C);

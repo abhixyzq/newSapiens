@@ -57,7 +57,7 @@ class ProcessWorker(private val ctx: Context, p: WorkerParameters) : CoroutineWo
                 val at = { off: Long? -> id + (off ?: 0) }  // speech time = recording start + offset; never processing time
                 dao.saveResult(
                     cap.copy(status = "ready", error = null, durationS = r.durationS, language = r.language, title = r.title,
-                        summary = r.summary, topics = r.topics.joinToString(", "), transcript = r.transcript,
+                        summary = r.summary, topics = r.topics.joinToString(", "), transcript = r.transcript, sourceTranscript = r.sourceTranscript,
                         processedAt = System.currentTimeMillis(), speechS = r.speechS),
                     r.moments.map { Moment(captureId = id, category = it.category, title = it.title, text = it.text, atMs = at(it.offsetMs), importance = it.importance, line = it.line) },
                     r.events.map { Event(captureId = id, title = it.title, description = it.description, category = it.category,

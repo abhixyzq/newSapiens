@@ -21,6 +21,9 @@ class LogicTest {
     @Test fun parsesFullResponse() {
         val p = parseProcess(body)
         assertEquals("[0:00] Hello\n[1:05] Pricing decided", p.transcript)
+        assertEquals("", p.sourceTranscript)  // English speech: no separate original
+        val hi = parseProcess(body.replace(""""text":"Hello",""", """"text":"Hello","source_text":"नमस्ते","""))
+        assertEquals("[0:00] नमस्ते\n[1:05] Pricing decided", hi.sourceTranscript)
         assertEquals("A short sync.", p.summary)
         assertEquals(listOf("pricing", "launch"), p.topics)
         assertEquals(ParsedMoment("decision", "Decision", "Use three tiers", 65000, 0.8, 1), p.moments.first { it.category == "decision" })

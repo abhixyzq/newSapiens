@@ -35,6 +35,7 @@ data class Capture(
     @ColumnInfo(defaultValue = "''") val title: String = "",
     val processedAt: Long? = null,  // when the server analysed it; never used to place anything on the timeline
     val speechS: Double? = null,  // seconds of actual speech (sum of segments), not recording length
+    @ColumnInfo(defaultValue = "''") val sourceTranscript: String = "",  // original language; empty = same as transcript
 )
 
 /** Important moment: a decision, task, commitment, idea or risk, at the speech time it was said (capture start + segment offset).
@@ -141,7 +142,7 @@ abstract class MemoryDao {
     @Transaction open suspend fun deleteCapture(id: Long) { delMoments(id); delEvents(id); delTasks(id); delCapture(id) }
 }
 
-@Database(entities = [Capture::class, Moment::class, Event::class, ActionItem::class, DailySummary::class, CaptureFts::class], version = 4, exportSchema = false)
+@Database(entities = [Capture::class, Moment::class, Event::class, ActionItem::class, DailySummary::class, CaptureFts::class], version = 5, exportSchema = false)
 abstract class Db : RoomDatabase() {
     abstract fun dao(): MemoryDao
 
@@ -175,8 +176,11 @@ abstract class Db : RoomDatabase() {
         private val v4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) = db.execSQL("ALTER TABLE ActionItem ADD COLUMN `dueTime` TEXT")
         }
+        private val v5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) = db.execSQL("ALTER TABLE Capture ADD COLUMN `sourceTranscript` TEXT NOT NULL DEFAULT ''")
+        }
         fun get(ctx: Context): Db = inst ?: synchronized(this) {
-            inst ?: Room.databaseBuilder(ctx.applicationContext, Db::class.java, "memory.db").addMigrations(v2, v3, v4).build().also { inst = it }
+            inst ?: Room.databaseBuilder(ctx.applicationContext, Db::class.java, "memory.db").addMigrations(v2, v3, v4, v5).build().also { inst = it }
         }
     }
 }
